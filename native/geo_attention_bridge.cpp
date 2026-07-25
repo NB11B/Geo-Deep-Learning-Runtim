@@ -42,8 +42,10 @@ geo_tensor_attention_shape make_attention_shape(
     const std::int64_t head_dim = q.size(-1);
     TORCH_CHECK(tokens > 0 && head_dim > 0,
                 "attention token and head dimensions must be positive");
+    TORCH_CHECK(tokens <= INT64_MAX / head_dim,
+                "attention row width overflows int64");
     const std::int64_t row_width = tokens * head_dim;
-    TORCH_CHECK(row_width > 0 && q.numel() % row_width == 0,
+    TORCH_CHECK(q.numel() % row_width == 0,
                 "attention tensors cannot be flattened into [outer, tokens, head_dim]");
     const std::int64_t outer = q.numel() / row_width;
     TORCH_CHECK(outer > 0, "attention outer dimension must be positive");
@@ -126,11 +128,10 @@ std::vector<torch::Tensor> geo_attention_backward(
     TORCH_CHECK(grad_output.device() == q.device(),
                 "attention grad_output device mismatch");
     TORCH_CHECK(
-        probabilities.sizes() == torch::IntArrayRef({
-            static_cast<std::int64_t>(shape.outer),
-            static_cast<std::int64_t>(shape.tokens),
-            static_cast<std::int64_t>(shape.tokens),
-        }),
+        probabilities.dim() == 3 &&
+        probabilities.size(0) == static_cast<std::int64_t>(shape.outer) &&
+        probabilities.size(1) == static_cast<std::int64_t>(shape.tokens) &&
+        probabilities.size(2) == static_cast<std::int64_t>(shape.tokens),
         "attention probability shape mismatch"
     );
     TORCH_CHECK(probabilities.device() == q.device(),
