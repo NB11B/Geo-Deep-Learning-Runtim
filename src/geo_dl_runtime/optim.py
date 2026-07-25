@@ -4,7 +4,10 @@ from collections.abc import Iterable
 
 import torch
 
-from . import _optimizer
+try:
+    from . import _optimizer
+except ImportError:
+    _optimizer = None
 
 
 class GeoAdamW:
@@ -20,6 +23,8 @@ class GeoAdamW:
         weight_decay: float = 0.01,
         max_grad_norm: float = 1.0,
     ) -> None:
+        if _optimizer is None:
+            raise RuntimeError("the native GEO optimizer extension is not built")
         self.parameters = tuple(parameter for parameter in parameters if parameter.requires_grad)
         if not self.parameters:
             raise ValueError("GeoAdamW requires at least one trainable parameter")
