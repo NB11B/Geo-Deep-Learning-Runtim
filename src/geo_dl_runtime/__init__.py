@@ -9,6 +9,7 @@ from .capabilities import (
     GEO_DL_RUNTIME_ABI_VERSION,
     LINEAR_CAPABILITIES,
     LOSS_CAPABILITIES,
+    LOSS_STAGE_CAPABILITIES,
     POSITION_CAPABILITIES,
     POSITION_STAGE_CAPABILITIES,
     STAGES,
@@ -31,6 +32,11 @@ try:
 except ImportError:
     _attention = None
 
+try:
+    from . import _loss
+except ImportError:
+    _loss = None
+
 
 def _validate_native_module(module, name: str) -> None:
     if module is None:
@@ -50,9 +56,10 @@ def _validate_native_module(module, name: str) -> None:
 _validate_native_module(_C, "geo_dl_runtime._C")
 _validate_native_module(_rope, "geo_dl_runtime._rope")
 _validate_native_module(_attention, "geo_dl_runtime._attention")
+_validate_native_module(_loss, "geo_dl_runtime._loss")
 
 _native_modules = tuple(
-    module for module in (_C, _rope, _attention) if module is not None
+    module for module in (_C, _rope, _attention, _loss) if module is not None
 )
 GEO_BACKEND = "GeometricElementaryOperators"
 GEO_OWNS_BACKWARD = bool(_C is not None) and all(
@@ -279,6 +286,48 @@ else:
     causal_attention = _unavailable
 
 
+if _loss is not None:
+    import torch
+
+    class _GeoCrossEntropyFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            logits: torch.Tensor,
+            targets: torch.Tensor,
+            ignore_index: int,
+        ) -> torch.Tensor:
+            logits_c = logits.contiguous()
+            targets_c = targets.contiguous()
+            loss, probabilities, normalizer = _loss.forward(
+                logits_c, targets_c, int(ignore_index)
+            )
+            ctx.ignore_index = int(ignore_index)
+            ctx.save_for_backward(probabilities, targets_c, normalizer)
+            return loss
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            probabilities, targets, normalizer = ctx.saved_tensors
+            grad_logits = _loss.backward(
+                probabilities,
+                targets,
+                ctx.ignore_index,
+                normalizer,
+                grad_output.contiguous(),
+            )
+            return grad_logits, None, None
+
+    def cross_entropy(
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        ignore_index: int = -1,
+    ) -> torch.Tensor:
+        return _GeoCrossEntropyFunction.apply(logits, targets, int(ignore_index))
+else:
+    cross_entropy = _unavailable
+
+
 __all__ = [
     "ACTIVATION_CAPABILITIES",
     "ACTIVATION_STAGE_CAPABILITIES",
@@ -292,6 +341,7 @@ __all__ = [
     "GEO_OWNS_BACKWARD",
     "LINEAR_CAPABILITIES",
     "LOSS_CAPABILITIES",
+    "LOSS_STAGE_CAPABILITIES",
     "POSITION_CAPABILITIES",
     "POSITION_STAGE_CAPABILITIES",
     "TRANSFORMER_CAPABILITIES",
@@ -300,6 +350,7 @@ __all__ = [
     "apply_rope",
     "build_rope",
     "causal_attention",
+    "cross_entropy",
     "gelu",
     "linear",
     "mul",
