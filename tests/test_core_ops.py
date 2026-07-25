@@ -4,11 +4,13 @@ import pytest
 import torch
 
 runtime = pytest.importorskip("geo_dl_runtime")
+if not runtime.native_available():
+    pytest.skip("native GEO runtime extension is not built", allow_module_level=True)
 
 
 def devices():
     result = [torch.device("cpu")]
-    if torch.cuda.is_available() and runtime.native_available():
+    if torch.cuda.is_available() and runtime.GEO_CUDA_AVAILABLE:
         result.append(torch.device("cuda"))
     return result
 
@@ -85,15 +87,11 @@ def test_rms_norm_forward_and_vjp(device: torch.device):
     torch.testing.assert_close(weight.grad, weight_ref.grad, rtol=3e-5, atol=3e-5)
 
 
-def test_core_stage_is_declared_when_native_extension_is_built():
-    if not runtime.native_available():
-        pytest.skip("native extension is not built")
+def test_core_stage_is_declared():
     runtime.require_stage("core")
     assert runtime.CORE_CAPABILITIES.issubset(runtime.native_capabilities().available)
 
 
 def test_binary_ops_reject_shape_mismatch():
-    if not runtime.native_available():
-        pytest.skip("native extension is not built")
     with pytest.raises(RuntimeError, match="shape mismatch"):
         runtime.add(torch.ones(2, 3), torch.ones(2, 4))
