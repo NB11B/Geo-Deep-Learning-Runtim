@@ -33,6 +33,10 @@ function Invoke-Logged {
 
 foreach ($path in @($geoRoot, $runtimeRoot, $geosdpRoot)) {
     if (-not (Test-Path $path)) { throw "Required checkout not found: $path" }
+    git -C $path diff --quiet
+    if ($LASTEXITCODE -ne 0) { throw "Working tree in $path has unstaged changes." }
+    git -C $path diff --cached --quiet
+    if ($LASTEXITCODE -ne 0) { throw "Working tree in $path has staged uncommitted changes." }
 }
 
 $env:GEO_ROOT = $geoRoot
@@ -68,9 +72,12 @@ assert (major, minor) == (12, 0), f'Expected RTX 5070 capability (12, 0), got {(
 }
 
 Invoke-Logged "Record repository revisions" {
-    git -C $geoRoot rev-parse HEAD
-    git -C $runtimeRoot rev-parse HEAD
-    git -C $geosdpRoot rev-parse HEAD
+    foreach ($repo in @($geoRoot, $runtimeRoot, $geosdpRoot)) {
+        Write-Host "Repo: $repo"
+        git -C $repo remote get-url origin
+        git -C $repo rev-parse HEAD
+        git -C $repo status --porcelain
+    }
 }
 
 if (-not $SkipGeoHostBuild) {
@@ -126,15 +133,18 @@ print(json.dumps({
 '@
 }
 
+$logHash = (Get-FileHash -Path $logPath -Algorithm SHA256).Hash
+
 $summary = [ordered]@{
     status = "PASS"
     timestamp = (Get-Date).ToString("o")
     workspace = $Workspace
-    geo_root = $geoRoot
-    runtime_root = $runtimeRoot
-    geosdp_root = $geosdpRoot
+    geo_commit = (git -C $geoRoot rev-parse HEAD)
+    runtime_commit = (git -C $runtimeRoot rev-parse HEAD)
+    geosdp_commit = (git -C $geosdpRoot rev-parse HEAD)
     cuda_arch = $CudaArch
     log = $logPath
+    log_sha256 = $logHash
 }
 $summary | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 (Join-Path $artifactRoot "summary.json")
 Write-Host "CUDA acceptance PASS. Artifacts: $artifactRoot"
