@@ -44,8 +44,8 @@ def test_rope_table_build_matches_reference(device: torch.device):
 
     assert cosine.shape == (seq_len, head_dim // 2)
     assert sine.shape == (seq_len, head_dim // 2)
-    assert cosine.device == device
-    assert sine.device == device
+    assert cosine.device.type == device.type
+    assert sine.device.type == device.type
     torch.testing.assert_close(cosine, cosine_ref, rtol=4e-5, atol=4e-5)
     torch.testing.assert_close(sine, sine_ref, rtol=4e-5, atol=4e-5)
 

@@ -22,6 +22,11 @@ from .capabilities import (
 )
 
 try:
+    import torch
+except ImportError:
+    pass
+
+try:
     from . import _C
 except ImportError:
     _C = None

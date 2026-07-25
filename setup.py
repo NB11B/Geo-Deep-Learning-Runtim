@@ -55,14 +55,19 @@ common_compile_args = {"cxx": ["-O3"], "nvcc": ["-O3", "--use_fast_math", "-line
 
 
 def extension(name: str, bridge: str, cpu_sources: list[str], cuda_sources: list[str]) -> CUDAExtension:
+    raw_sources = [
+        ROOT / "native" / bridge,
+        GEO_ROOT / "src" / "tensor_linear.c",
+        *[GEO_ROOT / "src" / source for source in cpu_sources],
+        *[GEO_ROOT / "src" / source for source in cuda_sources],
+    ]
+    rel_sources = [
+        os.path.relpath(path, ROOT).replace("\\", "/")
+        for path in raw_sources
+    ]
     return CUDAExtension(
         name=name,
-        sources=[
-            str(ROOT / "native" / bridge),
-            str(GEO_ROOT / "src" / "tensor_linear.c"),
-            *[str(GEO_ROOT / "src" / source) for source in cpu_sources],
-            *[str(GEO_ROOT / "src" / source) for source in cuda_sources],
-        ],
+        sources=rel_sources,
         include_dirs=[str(GEO_ROOT / "include")],
         define_macros=common_macros,
         extra_compile_args=common_compile_args,
