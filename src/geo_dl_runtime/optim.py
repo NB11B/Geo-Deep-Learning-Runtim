@@ -118,3 +118,19 @@ class GeoAdamW:
                 "max_grad_norm": self.max_grad_norm,
             },
         }
+
+    def load_state_dict(self, state_dict: dict[str, object]) -> None:
+        self.step_count = int(state_dict["step"])
+        if "hyperparameters" in state_dict:
+            hp = state_dict["hyperparameters"]
+            self.learning_rate = float(hp.get("learning_rate", self.learning_rate))
+            if "betas" in hp:
+                self.beta1, self.beta2 = hp["betas"]
+            self.epsilon = float(hp.get("epsilon", self.epsilon))
+            self.weight_decay = float(hp.get("weight_decay", self.weight_decay))
+            self.max_grad_norm = float(hp.get("max_grad_norm", self.max_grad_norm))
+        states = state_dict.get("states", [])
+        for parameter, state in zip(self.parameters, states):
+            first, second = self._state_for(parameter)
+            first.copy_(state["first_moment"])
+            second.copy_(state["second_moment"])
