@@ -26,15 +26,19 @@ GEOSDP
 
 ## Capability stages
 
+Stages are cumulative. The `activation` stage includes the complete `core` stage.
+
 | Stage | Operations | Status |
 |---|---|---|
 | `linear` | linear forward and VJP | implemented |
-| `core` | linear, add, multiply, scale, RMSNorm | implemented; CUDA acceptance pending |
-| `activation` | GELU, fused SiLU-multiply | GEO kernels implemented; binding in progress |
+| `core` | linear, add, multiply, scale, RMSNorm | implemented; physical CUDA acceptance pending |
+| `activation` | core plus exact GELU and fused SiLU-multiply | implemented; physical CUDA acceptance pending |
 | `position` | RoPE construction and application | pending |
 | `attention` | causal attention forward and VJP | pending |
 | `loss` | cross-entropy forward and VJP | pending |
 | `transformer` | complete GEOSDP primitive surface | pending |
+
+The activation implementation provides GEO-owned forward and VJP paths on CPU and CUDA. PyTorch is used only to allocate tensors, schedule autograd, provide the active CUDA stream, and act as an independent parity oracle in tests.
 
 ## Repository layout
 
@@ -63,6 +67,7 @@ cd GeometricElementaryOperators
 git checkout agent/geo-dl-runtime-v1
 
 cd ..\Geo-Deep-Learning-Runtim
+git checkout agent/activation-stage-v1
 $env:GEO_ROOT = (Resolve-Path ..\GeometricElementaryOperators)
 $env:TORCH_CUDA_ARCH_LIST = "12.0"
 python -m pip install -U pip setuptools wheel ninja
@@ -77,12 +82,17 @@ cd GeometricElementaryOperators
 git checkout agent/geo-dl-runtime-v1
 
 cd ../Geo-Deep-Learning-Runtim
+git checkout agent/activation-stage-v1
 export GEO_ROOT="$(cd ../GeometricElementaryOperators && pwd)"
 export TORCH_CUDA_ARCH_LIST="12.0"
 python -m pip install -U pip setuptools wheel ninja
 python -m pip install -e '.[dev]' --no-build-isolation
 pytest -q
 ```
+
+## Acceptance boundary
+
+The checked-in tests compare CPU and CUDA forward values and gradients against exact PyTorch mathematical references. A physical CUDA 13.x build and run on the target RTX 5070 remains required before the activation stage is considered accepted for training.
 
 ## Target environment
 
