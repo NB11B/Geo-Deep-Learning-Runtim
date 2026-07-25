@@ -14,15 +14,18 @@ try:
 except ImportError:
     _C = None
 
+GEO_BACKEND = "GeometricElementaryOperators" if _C is None else str(_C.GEO_BACKEND)
+GEO_OWNS_BACKWARD = False if _C is None else bool(_C.GEO_OWNS_BACKWARD)
+GEO_CUDA_AVAILABLE = False if _C is None else bool(_C.GEO_CUDA_AVAILABLE)
+GEO_CAPABILITIES = frozenset() if _C is None else frozenset(getattr(_C, "GEO_CAPABILITIES", ()))
+
 
 def native_available() -> bool:
     return _C is not None
 
 
 def native_capabilities() -> RuntimeCapabilities:
-    if _C is None:
-        return RuntimeCapabilities(frozenset())
-    return RuntimeCapabilities.from_iterable(getattr(_C, "GEO_CAPABILITIES", ()))
+    return RuntimeCapabilities.from_iterable(GEO_CAPABILITIES)
 
 
 def require_stage(stage: str) -> None:
@@ -122,6 +125,10 @@ else:
 
 __all__ = [
     "GEO_DL_RUNTIME_ABI_VERSION",
+    "GEO_BACKEND",
+    "GEO_CAPABILITIES",
+    "GEO_CUDA_AVAILABLE",
+    "GEO_OWNS_BACKWARD",
     "CORE_CAPABILITIES",
     "LINEAR_CAPABILITIES",
     "TRANSFORMER_CAPABILITIES",
