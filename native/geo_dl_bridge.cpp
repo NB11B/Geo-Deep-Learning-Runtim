@@ -67,12 +67,12 @@ torch::Tensor geo_linear_forward(torch::Tensor x, torch::Tensor weight) {
     torch::Tensor output = torch::empty(output_shape, x.options());
     if (x.is_cuda()) {
 #ifdef WITH_CUDA
-        check_status(geo_tensor_linear_cuda_forward(x.data_ptr<float>(), weight.data_ptr<float>(), output.data_ptr<float>(), shape, current_stream(x)), "geo_tensor_linear_cuda_forward");
+        check_status(geo_tensor_linear_cuda_forward(x.data_ptr<float>(), weight.data_ptr<float>(), output.data_ptr<float>(), &shape, current_stream(x)), "geo_tensor_linear_cuda_forward");
 #else
         TORCH_CHECK(false, "runtime was built without CUDA support");
 #endif
     } else {
-        check_status(geo_tensor_linear_forward(x.data_ptr<float>(), weight.data_ptr<float>(), output.data_ptr<float>(), shape), "geo_tensor_linear_forward");
+        check_status(geo_tensor_linear_forward(x.data_ptr<float>(), weight.data_ptr<float>(), output.data_ptr<float>(), &shape), "geo_tensor_linear_forward");
     }
     return output;
 }
@@ -87,12 +87,12 @@ std::vector<torch::Tensor> geo_linear_backward(torch::Tensor x, torch::Tensor we
     torch::Tensor grad_weight = torch::empty_like(weight);
     if (x.is_cuda()) {
 #ifdef WITH_CUDA
-        check_status(geo_tensor_linear_cuda_vjp(x.data_ptr<float>(), weight.data_ptr<float>(), grad_output.data_ptr<float>(), grad_x.data_ptr<float>(), grad_weight.data_ptr<float>(), shape, current_stream(x)), "geo_tensor_linear_cuda_vjp");
+        check_status(geo_tensor_linear_cuda_vjp(x.data_ptr<float>(), weight.data_ptr<float>(), grad_output.data_ptr<float>(), grad_x.data_ptr<float>(), grad_weight.data_ptr<float>(), &shape, current_stream(x)), "geo_tensor_linear_cuda_vjp");
 #else
         TORCH_CHECK(false, "runtime was built without CUDA support");
 #endif
     } else {
-        check_status(geo_tensor_linear_vjp(x.data_ptr<float>(), weight.data_ptr<float>(), grad_output.data_ptr<float>(), grad_x.data_ptr<float>(), grad_weight.data_ptr<float>(), shape), "geo_tensor_linear_vjp");
+        check_status(geo_tensor_linear_vjp(x.data_ptr<float>(), weight.data_ptr<float>(), grad_output.data_ptr<float>(), grad_x.data_ptr<float>(), grad_weight.data_ptr<float>(), &shape), "geo_tensor_linear_vjp");
     }
     return {grad_x, grad_weight};
 }

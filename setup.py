@@ -51,7 +51,10 @@ if missing:
     )
 
 common_macros = [("WITH_CUDA", "1"), ("GEO_REAL_IS_DOUBLE", "0")]
-common_compile_args = {"cxx": ["-O3"], "nvcc": ["-O3", "--use_fast_math", "-lineinfo"]}
+common_compile_args = {
+    "cxx": ["-O3"],
+    "nvcc": ["-O3", "--use_fast_math", "-lineinfo", "--allow-unsupported-compiler"],
+}
 
 
 def extension(name: str, bridge: str, cpu_sources: list[str], cuda_sources: list[str]) -> CUDAExtension:
