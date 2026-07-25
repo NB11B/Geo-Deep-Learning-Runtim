@@ -76,10 +76,10 @@ if (-not $SkipGeoHostBuild) {
 Push-Location $runtimeRoot
 try {
     Invoke-Logged "Install runtime build dependencies" {
-        & $Python -m pip install -U pip setuptools wheel ninja pytest
+        & $Python -m pip install -U setuptools wheel ninja pytest
     }
     Invoke-Logged "Build and install CUDA runtime" {
-        & $Python -m pip install -e ".[dev]" --no-build-isolation --force-reinstall
+        & $Python -m pip install -e ".[dev]" --no-build-isolation --no-deps
     }
     Invoke-Logged "Verify runtime capability contract" {
         & $Python -c "import geo_dl_runtime as r; print(sorted(r.GEO_CAPABILITIES)); r.require_stage('training'); print('training stage: READY')"
@@ -93,7 +93,7 @@ finally {
 
 Push-Location $geosdpRoot
 try {
-    Invoke-Logged "Install GEOSDP" { & $Python -m pip install -e ".[dev]" }
+    Invoke-Logged "Install GEOSDP" { & $Python -m pip install -e ".[dev]" --no-deps }
     Invoke-Logged "Run GEOSDP tests" { & $Python -m pytest -q }
     Invoke-Logged "Run end-to-end native training test" { & $Python -m pytest -q tests/test_native_training_step.py -s }
     Invoke-Logged "Run two-step CUDA training smoke" {
