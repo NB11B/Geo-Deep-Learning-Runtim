@@ -11,9 +11,12 @@ ACTIVATION_CAPABILITIES = frozenset({"gelu", "silu_mul"})
 POSITION_CAPABILITIES = frozenset({"build_rope", "apply_rope"})
 ATTENTION_CAPABILITIES = frozenset({"causal_attention"})
 LOSS_CAPABILITIES = frozenset({"cross_entropy"})
+
+ACTIVATION_STAGE_CAPABILITIES = frozenset(
+    set(CORE_CAPABILITIES) | set(ACTIVATION_CAPABILITIES)
+)
 TRANSFORMER_CAPABILITIES = frozenset(
-    set(CORE_CAPABILITIES)
-    | set(ACTIVATION_CAPABILITIES)
+    set(ACTIVATION_STAGE_CAPABILITIES)
     | set(POSITION_CAPABILITIES)
     | set(ATTENTION_CAPABILITIES)
     | set(LOSS_CAPABILITIES)
@@ -43,5 +46,6 @@ class RuntimeCapabilities:
 STAGES = {
     "linear": LINEAR_CAPABILITIES,
     "core": CORE_CAPABILITIES,
+    "activation": ACTIVATION_STAGE_CAPABILITIES,
     "transformer": TRANSFORMER_CAPABILITIES,
 }
