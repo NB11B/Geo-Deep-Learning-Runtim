@@ -20,6 +20,8 @@ required = [
     GEO_ROOT / "include" / "geo" / "tensor_rope_cuda.h",
     GEO_ROOT / "include" / "geo" / "tensor_attention.h",
     GEO_ROOT / "include" / "geo" / "tensor_attention_cuda.h",
+    GEO_ROOT / "include" / "geo" / "tensor_loss.h",
+    GEO_ROOT / "include" / "geo" / "tensor_loss_cuda.h",
     GEO_ROOT / "src" / "tensor_linear.c",
     GEO_ROOT / "src" / "tensor_linear_cuda.cu",
     GEO_ROOT / "src" / "tensor_core.c",
@@ -30,6 +32,8 @@ required = [
     GEO_ROOT / "src" / "tensor_rope_cuda.cu",
     GEO_ROOT / "src" / "tensor_attention.c",
     GEO_ROOT / "src" / "tensor_attention_cuda.cu",
+    GEO_ROOT / "src" / "tensor_loss.c",
+    GEO_ROOT / "src" / "tensor_loss_cuda.cu",
 ]
 missing = [str(path) for path in required if not path.exists()]
 if missing:
@@ -80,6 +84,18 @@ setup(
                 str(GEO_ROOT / "src" / "tensor_linear.c"),
                 str(GEO_ROOT / "src" / "tensor_attention.c"),
                 str(GEO_ROOT / "src" / "tensor_attention_cuda.cu"),
+            ],
+            include_dirs=[str(GEO_ROOT / "include")],
+            define_macros=common_macros,
+            extra_compile_args=common_compile_args,
+        ),
+        CUDAExtension(
+            name="geo_dl_runtime._loss",
+            sources=[
+                str(ROOT / "native" / "geo_loss_bridge.cpp"),
+                str(GEO_ROOT / "src" / "tensor_linear.c"),
+                str(GEO_ROOT / "src" / "tensor_loss.c"),
+                str(GEO_ROOT / "src" / "tensor_loss_cuda.cu"),
             ],
             include_dirs=[str(GEO_ROOT / "include")],
             define_macros=common_macros,
