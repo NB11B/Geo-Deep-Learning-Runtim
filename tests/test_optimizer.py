@@ -20,7 +20,9 @@ def devices():
 
 
 def global_clip_scale(gradients: list[torch.Tensor], max_norm: float) -> float:
-    sum_square = sum(float(torch.sum(gradient.square()).item()) for gradient in gradients)
+    sum_square = sum(
+        float(torch.sum(gradient.square()).item()) for gradient in gradients
+    )
     return min(1.0, max_norm / (math.sqrt(sum_square) + 1e-6))
 
 
@@ -38,7 +40,8 @@ def test_geo_adamw_matches_reference_for_multiple_steps(device: torch.device):
         torch.nn.Parameter(torch.randn(7, device=device)),
     ]
     reference_parameters = [
-        torch.nn.Parameter(parameter.detach().clone()) for parameter in parameters
+        torch.nn.Parameter(parameter.detach().clone())
+        for parameter in parameters
     ]
 
     optimizer = runtime.GeoAdamW(
@@ -59,11 +62,12 @@ def test_geo_adamw_matches_reference_for_multiple_steps(device: torch.device):
         fused=False,
     )
 
-    expected_scales: list[float] = []
     for step in range(2):
         torch.manual_seed(100 + step)
-        gradients = [torch.randn_like(parameter) for parameter in parameters]
-        expected_scales.append(global_clip_scale(gradients, max_grad_norm))
+        gradients = [
+            torch.randn_like(parameter) for parameter in parameters
+        ]
+        expected_scale = global_clip_scale(gradients, max_grad_norm)
 
         for parameter, reference_parameter, gradient in zip(
             parameters, reference_parameters, gradients, strict=True
@@ -81,7 +85,7 @@ def test_geo_adamw_matches_reference_for_multiple_steps(device: torch.device):
         assert float(reference_norm.item()) > max_grad_norm
         torch.testing.assert_close(
             clip_scale,
-            torch.tensor(expected_scales[-1], device=device),
+            torch.tensor(expected_scale, device=device),
             rtol=2e-5,
             atol=2e-6,
         )
@@ -105,10 +109,10 @@ def test_geo_adamw_matches_reference_for_multiple_steps(device: torch.device):
     assert state["step"] == 2
     assert len(state["states"]) == len(parameters)
     state_tolerance = 3e-6 if device.type == "cpu" else 8e-5
-    for parameter, geo_state in zip(parameters, state["states"], strict=True):
-        reference_state = reference_optimizer.state[
-            reference_parameters[parameters.index(parameter)]
-        ]
+    for reference_parameter, geo_state in zip(
+        reference_parameters, state["states"], strict=True
+    ):
+        reference_state = reference_optimizer.state[reference_parameter]
         torch.testing.assert_close(
             geo_state["first_moment"],
             reference_state["exp_avg"],
