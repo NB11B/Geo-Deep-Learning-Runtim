@@ -153,6 +153,8 @@ std::vector<torch::Tensor> geo_attention_backward(
                 grad_q.data_ptr<float>(),
                 grad_k.data_ptr<float>(),
                 grad_v.data_ptr<float>(),
+                nullptr,
+                nullptr,
                 shape,
                 current_stream(q)
             ),
@@ -180,9 +182,61 @@ std::vector<torch::Tensor> geo_attention_backward(
     return {grad_q, grad_k, grad_v};
 }
 
+pybind11::tuple geo_attention_backward_profiled(
+    torch::Tensor q,
+    torch::Tensor k,
+    torch::Tensor v,
+    torch::Tensor probabilities,
+    torch::Tensor grad_output
+) {
+    check_tensor(q, "q");
+    check_tensor(k, "k");
+    check_tensor(v, "v");
+    check_tensor(probabilities, "probabilities");
+    check_tensor(grad_output, "grad_output");
+    const auto shape = make_attention_shape(q, k, v);
+
+    torch::Tensor grad_q = torch::empty_like(q);
+    torch::Tensor grad_k = torch::empty_like(k);
+    torch::Tensor grad_v = torch::empty_like(v);
+
+    geo_attention_backward_timings timings = {0.0f, 0.0f, 0.0f, 0.0f};
+
+#ifdef WITH_CUDA
+    if (q.is_cuda()) {
+        check_status(
+            geo_tensor_causal_attention_cuda_vjp(
+                q.data_ptr<float>(),
+                k.data_ptr<float>(),
+                v.data_ptr<float>(),
+                probabilities.data_ptr<float>(),
+                grad_output.data_ptr<float>(),
+                grad_q.data_ptr<float>(),
+                grad_k.data_ptr<float>(),
+                grad_v.data_ptr<float>(),
+                nullptr,
+                &timings,
+                shape,
+                current_stream(q)
+            ),
+            "geo_tensor_causal_attention_cuda_vjp"
+        );
+    }
+#endif
+
+    auto grads = pybind11::make_tuple(grad_q, grad_k, grad_v);
+    auto time_dict = pybind11::dict();
+    time_dict["t_dp_ds_us"] = timings.t_dp_ds_ms * 1000.0f;
+    time_dict["t_dq_us"] = timings.t_dq_ms * 1000.0f;
+    time_dict["t_dk_dv_us"] = timings.t_dk_dv_ms * 1000.0f;
+    time_dict["t_total_us"] = timings.t_total_ms * 1000.0f;
+    return pybind11::make_tuple(grads, time_dict);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("forward", &geo_attention_forward);
     module.def("backward", &geo_attention_backward);
+    module.def("backward_profiled", &geo_attention_backward_profiled);
     module.attr("GEO_DL_RUNTIME_ABI_VERSION") = 1;
     module.attr("GEO_BACKEND") = "GeometricElementaryOperators";
     module.attr("GEO_OWNS_BACKWARD") = true;
