@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from .capabilities import (
-    GEO_DL_RUNTIME_ABI_VERSION,
+    ACTIVATION_CAPABILITIES,
+    ACTIVATION_STAGE_CAPABILITIES,
+    ATTENTION_CAPABILITIES,
     CORE_CAPABILITIES,
+    GEO_DL_RUNTIME_ABI_VERSION,
     LINEAR_CAPABILITIES,
+    LOSS_CAPABILITIES,
+    POSITION_CAPABILITIES,
     STAGES,
     TRANSFORMER_CAPABILITIES,
     RuntimeCapabilities,
@@ -13,6 +18,14 @@ try:
     from . import _C
 except ImportError:
     _C = None
+
+if _C is not None:
+    native_abi = int(getattr(_C, "GEO_DL_RUNTIME_ABI_VERSION", -1))
+    if native_abi != GEO_DL_RUNTIME_ABI_VERSION:
+        raise RuntimeError(
+            "GEO deep-learning runtime ABI mismatch: "
+            f"Python expects {GEO_DL_RUNTIME_ABI_VERSION}, native extension reports {native_abi}"
+        )
 
 GEO_BACKEND = "GeometricElementaryOperators" if _C is None else str(_C.GEO_BACKEND)
 GEO_OWNS_BACKWARD = False if _C is None else bool(_C.GEO_OWNS_BACKWARD)
@@ -105,6 +118,31 @@ if _C is not None:
             )
             return grad_x, grad_weight, None
 
+    class _GeoGELUFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+            x_c = x.contiguous()
+            ctx.save_for_backward(x_c)
+            return _C.gelu_forward(x_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            (x,) = ctx.saved_tensors
+            return _C.gelu_backward(x, grad_output.contiguous())
+
+    class _GeoSiLUMulFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+            gate_c = gate.contiguous()
+            up_c = up.contiguous()
+            ctx.save_for_backward(gate_c, up_c)
+            return _C.silu_mul_forward(gate_c, up_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            gate, up = ctx.saved_tensors
+            return tuple(_C.silu_mul_backward(gate, up, grad_output.contiguous()))
+
     def linear(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         return _GeoLinearFunction.apply(x, weight)
 
@@ -119,21 +157,33 @@ if _C is not None:
 
     def rms_norm(x: torch.Tensor, weight: torch.Tensor, epsilon: float = 1e-6) -> torch.Tensor:
         return _GeoRMSNormFunction.apply(x, weight, float(epsilon))
+
+    def gelu(x: torch.Tensor) -> torch.Tensor:
+        return _GeoGELUFunction.apply(x)
+
+    def silu_mul(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+        return _GeoSiLUMulFunction.apply(gate, up)
 else:
-    linear = add = mul = scale = rms_norm = _unavailable
+    linear = add = mul = scale = rms_norm = gelu = silu_mul = _unavailable
 
 
 __all__ = [
-    "GEO_DL_RUNTIME_ABI_VERSION",
+    "ACTIVATION_CAPABILITIES",
+    "ACTIVATION_STAGE_CAPABILITIES",
+    "ATTENTION_CAPABILITIES",
+    "CORE_CAPABILITIES",
     "GEO_BACKEND",
     "GEO_CAPABILITIES",
     "GEO_CUDA_AVAILABLE",
+    "GEO_DL_RUNTIME_ABI_VERSION",
     "GEO_OWNS_BACKWARD",
-    "CORE_CAPABILITIES",
     "LINEAR_CAPABILITIES",
+    "LOSS_CAPABILITIES",
+    "POSITION_CAPABILITIES",
     "TRANSFORMER_CAPABILITIES",
     "RuntimeCapabilities",
     "add",
+    "gelu",
     "linear",
     "mul",
     "native_available",
@@ -141,4 +191,5 @@ __all__ = [
     "require_stage",
     "rms_norm",
     "scale",
+    "silu_mul",
 ]
