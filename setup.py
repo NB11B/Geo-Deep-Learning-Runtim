@@ -18,6 +18,8 @@ required = [
     GEO_ROOT / "include" / "geo" / "tensor_activation_cuda.h",
     GEO_ROOT / "include" / "geo" / "tensor_rope.h",
     GEO_ROOT / "include" / "geo" / "tensor_rope_cuda.h",
+    GEO_ROOT / "include" / "geo" / "tensor_attention.h",
+    GEO_ROOT / "include" / "geo" / "tensor_attention_cuda.h",
     GEO_ROOT / "src" / "tensor_linear.c",
     GEO_ROOT / "src" / "tensor_linear_cuda.cu",
     GEO_ROOT / "src" / "tensor_core.c",
@@ -26,6 +28,8 @@ required = [
     GEO_ROOT / "src" / "tensor_activation_cuda.cu",
     GEO_ROOT / "src" / "tensor_rope.c",
     GEO_ROOT / "src" / "tensor_rope_cuda.cu",
+    GEO_ROOT / "src" / "tensor_attention.c",
+    GEO_ROOT / "src" / "tensor_attention_cuda.cu",
 ]
 missing = [str(path) for path in required if not path.exists()]
 if missing:
@@ -64,6 +68,18 @@ setup(
                 str(GEO_ROOT / "src" / "tensor_linear.c"),
                 str(GEO_ROOT / "src" / "tensor_rope.c"),
                 str(GEO_ROOT / "src" / "tensor_rope_cuda.cu"),
+            ],
+            include_dirs=[str(GEO_ROOT / "include")],
+            define_macros=common_macros,
+            extra_compile_args=common_compile_args,
+        ),
+        CUDAExtension(
+            name="geo_dl_runtime._attention",
+            sources=[
+                str(ROOT / "native" / "geo_attention_bridge.cpp"),
+                str(GEO_ROOT / "src" / "tensor_linear.c"),
+                str(GEO_ROOT / "src" / "tensor_attention.c"),
+                str(GEO_ROOT / "src" / "tensor_attention_cuda.cu"),
             ],
             include_dirs=[str(GEO_ROOT / "include")],
             define_macros=common_macros,
