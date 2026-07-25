@@ -9,6 +9,7 @@ from .capabilities import (
     LINEAR_CAPABILITIES,
     LOSS_CAPABILITIES,
     POSITION_CAPABILITIES,
+    POSITION_STAGE_CAPABILITIES,
     STAGES,
     TRANSFORMER_CAPABILITIES,
     RuntimeCapabilities,
@@ -19,18 +20,43 @@ try:
 except ImportError:
     _C = None
 
-if _C is not None:
-    native_abi = int(getattr(_C, "GEO_DL_RUNTIME_ABI_VERSION", -1))
+try:
+    from . import _rope
+except ImportError:
+    _rope = None
+
+
+def _validate_native_module(module, name: str) -> None:
+    if module is None:
+        return
+    native_abi = int(getattr(module, "GEO_DL_RUNTIME_ABI_VERSION", -1))
     if native_abi != GEO_DL_RUNTIME_ABI_VERSION:
         raise RuntimeError(
-            "GEO deep-learning runtime ABI mismatch: "
-            f"Python expects {GEO_DL_RUNTIME_ABI_VERSION}, native extension reports {native_abi}"
+            f"{name} ABI mismatch: Python expects {GEO_DL_RUNTIME_ABI_VERSION}, "
+            f"native extension reports {native_abi}"
         )
+    if str(getattr(module, "GEO_BACKEND", "")) != "GeometricElementaryOperators":
+        raise RuntimeError(f"{name} does not identify GeometricElementaryOperators as its backend")
+    if not bool(getattr(module, "GEO_OWNS_BACKWARD", False)):
+        raise RuntimeError(f"{name} must report GEO_OWNS_BACKWARD=True")
 
-GEO_BACKEND = "GeometricElementaryOperators" if _C is None else str(_C.GEO_BACKEND)
-GEO_OWNS_BACKWARD = False if _C is None else bool(_C.GEO_OWNS_BACKWARD)
-GEO_CUDA_AVAILABLE = False if _C is None else bool(_C.GEO_CUDA_AVAILABLE)
-GEO_CAPABILITIES = frozenset() if _C is None else frozenset(getattr(_C, "GEO_CAPABILITIES", ()))
+
+_validate_native_module(_C, "geo_dl_runtime._C")
+_validate_native_module(_rope, "geo_dl_runtime._rope")
+
+_native_modules = tuple(module for module in (_C, _rope) if module is not None)
+GEO_BACKEND = "GeometricElementaryOperators"
+GEO_OWNS_BACKWARD = bool(_C is not None) and all(
+    bool(module.GEO_OWNS_BACKWARD) for module in _native_modules
+)
+GEO_CUDA_AVAILABLE = bool(_C is not None) and all(
+    bool(getattr(module, "GEO_CUDA_AVAILABLE", False)) for module in _native_modules
+)
+GEO_CAPABILITIES = frozenset(
+    capability
+    for module in _native_modules
+    for capability in getattr(module, "GEO_CAPABILITIES", ())
+)
 
 
 def native_available() -> bool:
@@ -45,12 +71,12 @@ def require_stage(stage: str) -> None:
     if stage not in STAGES:
         raise ValueError(f"unknown GEO runtime stage: {stage}")
     if _C is None:
-        raise RuntimeError("the native GEO deep-learning runtime extension is not built")
+        raise RuntimeError("the native GEO deep-learning runtime core extension is not built")
     native_capabilities().require(STAGES[stage], stage=stage)
 
 
 def _unavailable(*args, **kwargs):
-    raise RuntimeError("the native GEO deep-learning runtime extension is not built")
+    raise RuntimeError("the required native GEO deep-learning runtime extension is not built")
 
 
 if _C is not None:
@@ -167,6 +193,47 @@ else:
     linear = add = mul = scale = rms_norm = gelu = silu_mul = _unavailable
 
 
+if _rope is not None:
+    import torch
+
+    class _GeoRoPEFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            x: torch.Tensor,
+            cos_table: torch.Tensor,
+            sin_table: torch.Tensor,
+        ) -> torch.Tensor:
+            x_c = x.contiguous()
+            cos_c = cos_table.contiguous()
+            sin_c = sin_table.contiguous()
+            ctx.save_for_backward(cos_c, sin_c)
+            return _rope.apply_forward(x_c, cos_c, sin_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            cos_table, sin_table = ctx.saved_tensors
+            grad_x = _rope.apply_backward(
+                grad_output.contiguous(), cos_table, sin_table
+            )
+            return grad_x, None, None
+
+    def build_rope(seq_len: int, head_dim: int, theta: float, device) -> tuple[torch.Tensor, torch.Tensor]:
+        cos_table, sin_table = _rope.build(
+            int(seq_len), int(head_dim), float(theta), str(device)
+        )
+        return cos_table, sin_table
+
+    def apply_rope(
+        x: torch.Tensor,
+        cos_table: torch.Tensor,
+        sin_table: torch.Tensor,
+    ) -> torch.Tensor:
+        return _GeoRoPEFunction.apply(x, cos_table, sin_table)
+else:
+    build_rope = apply_rope = _unavailable
+
+
 __all__ = [
     "ACTIVATION_CAPABILITIES",
     "ACTIVATION_STAGE_CAPABILITIES",
@@ -180,9 +247,12 @@ __all__ = [
     "LINEAR_CAPABILITIES",
     "LOSS_CAPABILITIES",
     "POSITION_CAPABILITIES",
+    "POSITION_STAGE_CAPABILITIES",
     "TRANSFORMER_CAPABILITIES",
     "RuntimeCapabilities",
     "add",
+    "apply_rope",
+    "build_rope",
     "gelu",
     "linear",
     "mul",
