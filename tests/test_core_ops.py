@@ -89,7 +89,7 @@ def test_rms_norm_forward_and_vjp(device: torch.device):
 
 def test_core_stage_is_declared():
     runtime.require_stage("core")
-    assert runtime.CORE_CAPABILITIES.issubset(runtime.native_capabilities().available)
+    assert runtime.CORE_CAPABILITIES.issubset(runtime.native_capabilities().operations)
 
 
 def test_binary_ops_reject_shape_mismatch():
