@@ -12,8 +12,12 @@ GEO_ROOT = Path(os.environ.get("GEO_ROOT", ROOT.parent / "GeometricElementaryOpe
 required = [
     GEO_ROOT / "include" / "geo" / "tensor_linear.h",
     GEO_ROOT / "include" / "geo" / "tensor_linear_cuda.h",
+    GEO_ROOT / "include" / "geo" / "tensor_core.h",
+    GEO_ROOT / "include" / "geo" / "tensor_core_cuda.h",
     GEO_ROOT / "src" / "tensor_linear.c",
     GEO_ROOT / "src" / "tensor_linear_cuda.cu",
+    GEO_ROOT / "src" / "tensor_core.c",
+    GEO_ROOT / "src" / "tensor_core_cuda.cu",
 ]
 missing = [str(path) for path in required if not path.exists()]
 if missing:
@@ -30,6 +34,8 @@ setup(
                 str(ROOT / "native" / "geo_dl_bridge.cpp"),
                 str(GEO_ROOT / "src" / "tensor_linear.c"),
                 str(GEO_ROOT / "src" / "tensor_linear_cuda.cu"),
+                str(GEO_ROOT / "src" / "tensor_core.c"),
+                str(GEO_ROOT / "src" / "tensor_core_cuda.cu"),
             ],
             include_dirs=[str(GEO_ROOT / "include")],
             define_macros=[("WITH_CUDA", "1"), ("GEO_REAL_IS_DOUBLE", "0")],
