@@ -3,10 +3,12 @@
 #include <cstdint>
 #include <vector>
 
+#include "geo/tensor_activation.h"
 #include "geo/tensor_core.h"
 #include "geo/tensor_linear.h"
 #ifdef WITH_CUDA
 #include <ATen/cuda/CUDAContext.h>
+#include "geo/tensor_activation_cuda.h"
 #include "geo/tensor_core_cuda.h"
 #include "geo/tensor_linear_cuda.h"
 #endif
@@ -219,7 +221,10 @@ std::vector<torch::Tensor> geo_rms_norm_backward(torch::Tensor x, torch::Tensor 
     check_tensor(weight, "weight");
     check_tensor(grad_output, "grad_output");
     check_tensor(inv_rms, "inv_rms");
+    TORCH_CHECK(x.device() == weight.device() && x.device() == grad_output.device() && x.device() == inv_rms.device(), "all RMSNorm tensors must share a device");
     const auto shape = make_norm_shape(x, weight);
+    TORCH_CHECK(grad_output.sizes() == x.sizes(), "RMSNorm grad_output shape mismatch");
+    TORCH_CHECK(inv_rms.numel() == static_cast<std::int64_t>(shape.rows), "RMSNorm inv_rms shape mismatch");
     torch::Tensor grad_x = torch::empty_like(x);
     torch::Tensor grad_weight = torch::empty_like(weight);
     if (x.is_cuda()) {
@@ -234,6 +239,75 @@ std::vector<torch::Tensor> geo_rms_norm_backward(torch::Tensor x, torch::Tensor 
     return {grad_x, grad_weight};
 }
 
+torch::Tensor geo_gelu_forward(torch::Tensor x) {
+    check_tensor(x, "x");
+    torch::Tensor out = torch::empty_like(x);
+    if (x.is_cuda()) {
+#ifdef WITH_CUDA
+        check_status(geo_tensor_gelu_cuda_forward(x.data_ptr<float>(), out.data_ptr<float>(), static_cast<size_t>(x.numel()), current_stream(x)), "geo_tensor_gelu_cuda_forward");
+#else
+        TORCH_CHECK(false, "runtime was built without CUDA support");
+#endif
+    } else {
+        check_status(geo_tensor_gelu_forward(x.data_ptr<float>(), out.data_ptr<float>(), static_cast<size_t>(x.numel())), "geo_tensor_gelu_forward");
+    }
+    return out;
+}
+
+torch::Tensor geo_gelu_backward(torch::Tensor x, torch::Tensor grad_output) {
+    check_tensor(x, "x");
+    check_tensor(grad_output, "grad_output");
+    check_same(x, grad_output, "GELU backward");
+    torch::Tensor grad_x = torch::empty_like(x);
+    if (x.is_cuda()) {
+#ifdef WITH_CUDA
+        check_status(geo_tensor_gelu_cuda_vjp(x.data_ptr<float>(), grad_output.data_ptr<float>(), grad_x.data_ptr<float>(), static_cast<size_t>(x.numel()), current_stream(x)), "geo_tensor_gelu_cuda_vjp");
+#else
+        TORCH_CHECK(false, "runtime was built without CUDA support");
+#endif
+    } else {
+        check_status(geo_tensor_gelu_vjp(x.data_ptr<float>(), grad_output.data_ptr<float>(), grad_x.data_ptr<float>(), static_cast<size_t>(x.numel())), "geo_tensor_gelu_vjp");
+    }
+    return grad_x;
+}
+
+torch::Tensor geo_silu_mul_forward(torch::Tensor gate, torch::Tensor up) {
+    check_tensor(gate, "gate");
+    check_tensor(up, "up");
+    check_same(gate, up, "SiLU-multiply");
+    torch::Tensor out = torch::empty_like(gate);
+    if (gate.is_cuda()) {
+#ifdef WITH_CUDA
+        check_status(geo_tensor_silu_mul_cuda_forward(gate.data_ptr<float>(), up.data_ptr<float>(), out.data_ptr<float>(), static_cast<size_t>(gate.numel()), current_stream(gate)), "geo_tensor_silu_mul_cuda_forward");
+#else
+        TORCH_CHECK(false, "runtime was built without CUDA support");
+#endif
+    } else {
+        check_status(geo_tensor_silu_mul_forward(gate.data_ptr<float>(), up.data_ptr<float>(), out.data_ptr<float>(), static_cast<size_t>(gate.numel())), "geo_tensor_silu_mul_forward");
+    }
+    return out;
+}
+
+std::vector<torch::Tensor> geo_silu_mul_backward(torch::Tensor gate, torch::Tensor up, torch::Tensor grad_output) {
+    check_tensor(gate, "gate");
+    check_tensor(up, "up");
+    check_tensor(grad_output, "grad_output");
+    check_same(gate, up, "SiLU-multiply backward");
+    check_same(gate, grad_output, "SiLU-multiply backward");
+    torch::Tensor grad_gate = torch::empty_like(gate);
+    torch::Tensor grad_up = torch::empty_like(up);
+    if (gate.is_cuda()) {
+#ifdef WITH_CUDA
+        check_status(geo_tensor_silu_mul_cuda_vjp(gate.data_ptr<float>(), up.data_ptr<float>(), grad_output.data_ptr<float>(), grad_gate.data_ptr<float>(), grad_up.data_ptr<float>(), static_cast<size_t>(gate.numel()), current_stream(gate)), "geo_tensor_silu_mul_cuda_vjp");
+#else
+        TORCH_CHECK(false, "runtime was built without CUDA support");
+#endif
+    } else {
+        check_status(geo_tensor_silu_mul_vjp(gate.data_ptr<float>(), up.data_ptr<float>(), grad_output.data_ptr<float>(), grad_gate.data_ptr<float>(), grad_up.data_ptr<float>(), static_cast<size_t>(gate.numel())), "geo_tensor_silu_mul_vjp");
+    }
+    return {grad_gate, grad_up};
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("linear_forward", &geo_linear_forward);
     module.def("linear_backward", &geo_linear_backward);
@@ -245,10 +319,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("scale_backward", &geo_scale_backward);
     module.def("rms_norm_forward", &geo_rms_norm_forward);
     module.def("rms_norm_backward", &geo_rms_norm_backward);
+    module.def("gelu_forward", &geo_gelu_forward);
+    module.def("gelu_backward", &geo_gelu_backward);
+    module.def("silu_mul_forward", &geo_silu_mul_forward);
+    module.def("silu_mul_backward", &geo_silu_mul_backward);
     module.attr("GEO_DL_RUNTIME_ABI_VERSION") = 1;
     module.attr("GEO_BACKEND") = "GeometricElementaryOperators";
     module.attr("GEO_OWNS_BACKWARD") = true;
-    module.attr("GEO_CAPABILITIES") = pybind11::make_tuple("linear", "add", "mul", "scale", "rms_norm");
+    module.attr("GEO_CAPABILITIES") = pybind11::make_tuple("linear", "add", "mul", "scale", "rms_norm", "gelu", "silu_mul");
 #ifdef WITH_CUDA
     module.attr("GEO_CUDA_AVAILABLE") = true;
 #else
