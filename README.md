@@ -24,35 +24,78 @@ GEOSDP
 5. Incomplete capability sets fail closed.
 6. CPU and CUDA paths must be independently validated against mathematical references.
 
-## Initial capability stages
+## Capability stages
 
-| Stage | Operations |
-|---|---|
-| `linear` | linear forward and VJP |
-| `core` | linear, add, multiply, scale, RMSNorm |
-| `activation` | GELU, SiLU, fused SiLU-multiply |
-| `position` | RoPE construction and application |
-| `attention` | causal attention forward and VJP |
-| `loss` | cross-entropy forward and VJP |
-| `transformer` | complete primitive surface required by GEOSDP |
+| Stage | Operations | Status |
+|---|---|---|
+| `linear` | linear forward and VJP | implemented |
+| `core` | linear, add, multiply, scale, RMSNorm | implemented; physical CUDA acceptance pending |
+| `activation` | GELU, SiLU, fused SiLU-multiply | next |
+| `position` | RoPE construction and application | planned |
+| `attention` | causal attention forward and VJP | planned |
+| `loss` | cross-entropy forward and VJP | planned |
+| `transformer` | complete primitive surface required by GEOSDP | planned |
 
 ## Repository layout
 
 ```text
-include/geo_dl/       public runtime ABI
-native/               C++/CUDA extension bindings
-src/geo_dl_runtime/   Python package and autograd functions
-tests/                host and CUDA parity tests
-cmake/                native build integration
+native/               C++ bridge into GEO CPU/CUDA kernels
+src/geo_dl_runtime/   Python package, capabilities, custom autograd functions
+tests/                CPU and CUDA forward/VJP parity tests
+setup.py              native extension build against a GEO checkout
 ```
 
-## Current milestone
+## Current native surface
 
-The first milestone is to migrate the existing `geo_torch` linear bridge out of GEOSDP and extend it with elementwise arithmetic and fused RMSNorm. GeometricElementaryOperators remains the source of the underlying kernels and VJPs.
+```python
+geo_dl_runtime.linear(x, weight)
+geo_dl_runtime.add(a, b)
+geo_dl_runtime.mul(a, b)
+geo_dl_runtime.scale(x, scalar)
+geo_dl_runtime.rms_norm(x, weight, epsilon)
+```
+
+Every operation has a GEO-owned backward path. The native module declares the `core` capability only when all five operations are compiled into the extension.
+
+## Local build
+
+The corresponding GEO tensor sources currently live on the GEO integration branch until physical acceptance and merge:
+
+```powershell
+git clone https://github.com/NB11B/GeometricElementaryOperators.git
+git clone https://github.com/NB11B/Geo-Deep-Learning-Runtim.git
+git clone https://github.com/NB11B/GEOSDP.git
+
+cd GeometricElementaryOperators
+git checkout agent/geo-dl-runtime-v1
+
+cd ..\Geo-Deep-Learning-Runtim
+$env:GEO_ROOT = (Resolve-Path ..\GeometricElementaryOperators)
+$env:TORCH_CUDA_ARCH_LIST = "12.0"
+python -m pip install -U pip setuptools wheel ninja
+python -m pip install -e . --no-build-isolation
+pytest -q
+
+cd ..\GEOSDP
+git checkout agent/geo-dl-runtime-v1
+python -m pip install -e ".[dev]"
+pytest -q
+```
+
+## Acceptance boundary
+
+A source-level implementation is not a physical CUDA acceptance result. Before the `core` stage is considered released, the following must pass on the RTX 5070/CUDA 13 target:
+
+- extension compilation for compute capability 12.0;
+- CPU forward and VJP parity;
+- CUDA forward and VJP parity;
+- finite-gradient checks;
+- repeated training-step smoke tests;
+- no hidden PyTorch or ATen numerical fallback.
 
 ## Target environment
 
 - NVIDIA RTX 5070
 - CUDA 13.x
 - Python 3.11+
-- a CUDA-compatible PyTorch build used as tensor host and graph scheduler
+- a CUDA-compatible PyTorch build used only as tensor host and graph scheduler
