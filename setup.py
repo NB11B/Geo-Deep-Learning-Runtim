@@ -14,10 +14,14 @@ required = [
     GEO_ROOT / "include" / "geo" / "tensor_linear_cuda.h",
     GEO_ROOT / "include" / "geo" / "tensor_core.h",
     GEO_ROOT / "include" / "geo" / "tensor_core_cuda.h",
+    GEO_ROOT / "include" / "geo" / "tensor_activation.h",
+    GEO_ROOT / "include" / "geo" / "tensor_activation_cuda.h",
     GEO_ROOT / "src" / "tensor_linear.c",
     GEO_ROOT / "src" / "tensor_linear_cuda.cu",
     GEO_ROOT / "src" / "tensor_core.c",
     GEO_ROOT / "src" / "tensor_core_cuda.cu",
+    GEO_ROOT / "src" / "tensor_activation.c",
+    GEO_ROOT / "src" / "tensor_activation_cuda.cu",
 ]
 missing = [str(path) for path in required if not path.exists()]
 if missing:
@@ -36,6 +40,8 @@ setup(
                 str(GEO_ROOT / "src" / "tensor_linear_cuda.cu"),
                 str(GEO_ROOT / "src" / "tensor_core.c"),
                 str(GEO_ROOT / "src" / "tensor_core_cuda.cu"),
+                str(GEO_ROOT / "src" / "tensor_activation.c"),
+                str(GEO_ROOT / "src" / "tensor_activation_cuda.cu"),
             ],
             include_dirs=[str(GEO_ROOT / "include")],
             define_macros=[("WITH_CUDA", "1"), ("GEO_REAL_IS_DOUBLE", "0")],
