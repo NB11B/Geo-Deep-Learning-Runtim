@@ -24,6 +24,8 @@ required = [
     GEO_ROOT / "include" / "geo" / "tensor_loss_cuda.h",
     GEO_ROOT / "include" / "geo" / "tensor_embedding.h",
     GEO_ROOT / "include" / "geo" / "tensor_embedding_cuda.h",
+    GEO_ROOT / "include" / "geo" / "tensor_optimizer.h",
+    GEO_ROOT / "include" / "geo" / "tensor_optimizer_cuda.h",
     GEO_ROOT / "src" / "tensor_linear.c",
     GEO_ROOT / "src" / "tensor_linear_cuda.cu",
     GEO_ROOT / "src" / "tensor_core.c",
@@ -38,6 +40,8 @@ required = [
     GEO_ROOT / "src" / "tensor_loss_cuda.cu",
     GEO_ROOT / "src" / "tensor_embedding.c",
     GEO_ROOT / "src" / "tensor_embedding_cuda.cu",
+    GEO_ROOT / "src" / "tensor_optimizer.c",
+    GEO_ROOT / "src" / "tensor_optimizer_cuda.cu",
 ]
 missing = [str(path) for path in required if not path.exists()]
 if missing:
@@ -47,76 +51,37 @@ if missing:
     )
 
 common_macros = [("WITH_CUDA", "1"), ("GEO_REAL_IS_DOUBLE", "0")]
-common_compile_args = {
-    "cxx": ["-O3"],
-    "nvcc": ["-O3", "--use_fast_math", "-lineinfo"],
-}
+common_compile_args = {"cxx": ["-O3"], "nvcc": ["-O3", "--use_fast_math", "-lineinfo"]}
+
+
+def extension(name: str, bridge: str, cpu_sources: list[str], cuda_sources: list[str]) -> CUDAExtension:
+    return CUDAExtension(
+        name=name,
+        sources=[
+            str(ROOT / "native" / bridge),
+            str(GEO_ROOT / "src" / "tensor_linear.c"),
+            *[str(GEO_ROOT / "src" / source) for source in cpu_sources],
+            *[str(GEO_ROOT / "src" / source) for source in cuda_sources],
+        ],
+        include_dirs=[str(GEO_ROOT / "include")],
+        define_macros=common_macros,
+        extra_compile_args=common_compile_args,
+    )
+
 
 setup(
     ext_modules=[
-        CUDAExtension(
-            name="geo_dl_runtime._C",
-            sources=[
-                str(ROOT / "native" / "geo_dl_bridge.cpp"),
-                str(GEO_ROOT / "src" / "tensor_linear.c"),
-                str(GEO_ROOT / "src" / "tensor_linear_cuda.cu"),
-                str(GEO_ROOT / "src" / "tensor_core.c"),
-                str(GEO_ROOT / "src" / "tensor_core_cuda.cu"),
-                str(GEO_ROOT / "src" / "tensor_activation.c"),
-                str(GEO_ROOT / "src" / "tensor_activation_cuda.cu"),
-            ],
-            include_dirs=[str(GEO_ROOT / "include")],
-            define_macros=common_macros,
-            extra_compile_args=common_compile_args,
+        extension(
+            "geo_dl_runtime._C",
+            "geo_dl_bridge.cpp",
+            ["tensor_core.c", "tensor_activation.c"],
+            ["tensor_linear_cuda.cu", "tensor_core_cuda.cu", "tensor_activation_cuda.cu"],
         ),
-        CUDAExtension(
-            name="geo_dl_runtime._rope",
-            sources=[
-                str(ROOT / "native" / "geo_rope_bridge.cpp"),
-                str(GEO_ROOT / "src" / "tensor_linear.c"),
-                str(GEO_ROOT / "src" / "tensor_rope.c"),
-                str(GEO_ROOT / "src" / "tensor_rope_cuda.cu"),
-            ],
-            include_dirs=[str(GEO_ROOT / "include")],
-            define_macros=common_macros,
-            extra_compile_args=common_compile_args,
-        ),
-        CUDAExtension(
-            name="geo_dl_runtime._attention",
-            sources=[
-                str(ROOT / "native" / "geo_attention_bridge.cpp"),
-                str(GEO_ROOT / "src" / "tensor_linear.c"),
-                str(GEO_ROOT / "src" / "tensor_attention.c"),
-                str(GEO_ROOT / "src" / "tensor_attention_cuda.cu"),
-            ],
-            include_dirs=[str(GEO_ROOT / "include")],
-            define_macros=common_macros,
-            extra_compile_args=common_compile_args,
-        ),
-        CUDAExtension(
-            name="geo_dl_runtime._loss",
-            sources=[
-                str(ROOT / "native" / "geo_loss_bridge.cpp"),
-                str(GEO_ROOT / "src" / "tensor_linear.c"),
-                str(GEO_ROOT / "src" / "tensor_loss.c"),
-                str(GEO_ROOT / "src" / "tensor_loss_cuda.cu"),
-            ],
-            include_dirs=[str(GEO_ROOT / "include")],
-            define_macros=common_macros,
-            extra_compile_args=common_compile_args,
-        ),
-        CUDAExtension(
-            name="geo_dl_runtime._embedding",
-            sources=[
-                str(ROOT / "native" / "geo_embedding_bridge.cpp"),
-                str(GEO_ROOT / "src" / "tensor_linear.c"),
-                str(GEO_ROOT / "src" / "tensor_embedding.c"),
-                str(GEO_ROOT / "src" / "tensor_embedding_cuda.cu"),
-            ],
-            include_dirs=[str(GEO_ROOT / "include")],
-            define_macros=common_macros,
-            extra_compile_args=common_compile_args,
-        ),
+        extension("geo_dl_runtime._rope", "geo_rope_bridge.cpp", ["tensor_rope.c"], ["tensor_rope_cuda.cu"]),
+        extension("geo_dl_runtime._attention", "geo_attention_bridge.cpp", ["tensor_attention.c"], ["tensor_attention_cuda.cu"]),
+        extension("geo_dl_runtime._loss", "geo_loss_bridge.cpp", ["tensor_loss.c"], ["tensor_loss_cuda.cu"]),
+        extension("geo_dl_runtime._embedding", "geo_embedding_bridge.cpp", ["tensor_embedding.c"], ["tensor_embedding_cuda.cu"]),
+        extension("geo_dl_runtime._optimizer", "geo_optimizer_bridge.cpp", ["tensor_optimizer.c"], ["tensor_optimizer_cuda.cu"]),
     ],
     cmdclass={"build_ext": BuildExtension.with_options(no_python_abi_suffix=True)},
 )
