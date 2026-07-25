@@ -6,10 +6,12 @@ from .capabilities import (
     ATTENTION_CAPABILITIES,
     ATTENTION_STAGE_CAPABILITIES,
     CORE_CAPABILITIES,
+    EMBEDDING_CAPABILITIES,
     GEO_DL_RUNTIME_ABI_VERSION,
     LINEAR_CAPABILITIES,
     LOSS_CAPABILITIES,
     LOSS_STAGE_CAPABILITIES,
+    MODEL_STAGE_CAPABILITIES,
     POSITION_CAPABILITIES,
     POSITION_STAGE_CAPABILITIES,
     STAGES,
@@ -21,21 +23,22 @@ try:
     from . import _C
 except ImportError:
     _C = None
-
 try:
     from . import _rope
 except ImportError:
     _rope = None
-
 try:
     from . import _attention
 except ImportError:
     _attention = None
-
 try:
     from . import _loss
 except ImportError:
     _loss = None
+try:
+    from . import _embedding
+except ImportError:
+    _embedding = None
 
 
 def _validate_native_module(module, name: str) -> None:
@@ -57,9 +60,12 @@ _validate_native_module(_C, "geo_dl_runtime._C")
 _validate_native_module(_rope, "geo_dl_runtime._rope")
 _validate_native_module(_attention, "geo_dl_runtime._attention")
 _validate_native_module(_loss, "geo_dl_runtime._loss")
+_validate_native_module(_embedding, "geo_dl_runtime._embedding")
 
 _native_modules = tuple(
-    module for module in (_C, _rope, _attention, _loss) if module is not None
+    module
+    for module in (_C, _rope, _attention, _loss, _embedding)
+    if module is not None
 )
 GEO_BACKEND = "GeometricElementaryOperators"
 GEO_OWNS_BACKWARD = bool(_C is not None) and all(
@@ -187,22 +193,16 @@ if _C is not None:
 
     def linear(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         return _GeoLinearFunction.apply(x, weight)
-
     def add(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return _GeoAddFunction.apply(a, b)
-
     def mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return _GeoMulFunction.apply(a, b)
-
     def scale(x: torch.Tensor, scalar: float) -> torch.Tensor:
         return _GeoScaleFunction.apply(x, float(scalar))
-
     def rms_norm(x: torch.Tensor, weight: torch.Tensor, epsilon: float = 1e-6) -> torch.Tensor:
         return _GeoRMSNormFunction.apply(x, weight, float(epsilon))
-
     def gelu(x: torch.Tensor) -> torch.Tensor:
         return _GeoGELUFunction.apply(x)
-
     def silu_mul(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
         return _GeoSiLUMulFunction.apply(gate, up)
 else:
@@ -214,12 +214,7 @@ if _rope is not None:
 
     class _GeoRoPEFunction(torch.autograd.Function):
         @staticmethod
-        def forward(
-            ctx,
-            x: torch.Tensor,
-            cos_table: torch.Tensor,
-            sin_table: torch.Tensor,
-        ) -> torch.Tensor:
+        def forward(ctx, x: torch.Tensor, cos_table: torch.Tensor, sin_table: torch.Tensor) -> torch.Tensor:
             x_c = x.contiguous()
             cos_c = cos_table.contiguous()
             sin_c = sin_table.contiguous()
@@ -229,22 +224,11 @@ if _rope is not None:
         @staticmethod
         def backward(ctx, grad_output: torch.Tensor):
             cos_table, sin_table = ctx.saved_tensors
-            grad_x = _rope.apply_backward(
-                grad_output.contiguous(), cos_table, sin_table
-            )
-            return grad_x, None, None
+            return _rope.apply_backward(grad_output.contiguous(), cos_table, sin_table), None, None
 
     def build_rope(seq_len: int, head_dim: int, theta: float, device) -> tuple[torch.Tensor, torch.Tensor]:
-        cos_table, sin_table = _rope.build(
-            int(seq_len), int(head_dim), float(theta), str(device)
-        )
-        return cos_table, sin_table
-
-    def apply_rope(
-        x: torch.Tensor,
-        cos_table: torch.Tensor,
-        sin_table: torch.Tensor,
-    ) -> torch.Tensor:
+        return tuple(_rope.build(int(seq_len), int(head_dim), float(theta), str(device)))
+    def apply_rope(x: torch.Tensor, cos_table: torch.Tensor, sin_table: torch.Tensor) -> torch.Tensor:
         return _GeoRoPEFunction.apply(x, cos_table, sin_table)
 else:
     build_rope = apply_rope = _unavailable
@@ -255,15 +239,8 @@ if _attention is not None:
 
     class _GeoCausalAttentionFunction(torch.autograd.Function):
         @staticmethod
-        def forward(
-            ctx,
-            q: torch.Tensor,
-            k: torch.Tensor,
-            v: torch.Tensor,
-        ) -> torch.Tensor:
-            q_c = q.contiguous()
-            k_c = k.contiguous()
-            v_c = v.contiguous()
+        def forward(ctx, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+            q_c, k_c, v_c = q.contiguous(), k.contiguous(), v.contiguous()
             output, probabilities = _attention.forward(q_c, k_c, v_c)
             ctx.save_for_backward(q_c, k_c, v_c, probabilities)
             return output
@@ -271,16 +248,9 @@ if _attention is not None:
         @staticmethod
         def backward(ctx, grad_output: torch.Tensor):
             q, k, v, probabilities = ctx.saved_tensors
-            grad_q, grad_k, grad_v = _attention.backward(
-                q, k, v, probabilities, grad_output.contiguous()
-            )
-            return grad_q, grad_k, grad_v
+            return tuple(_attention.backward(q, k, v, probabilities, grad_output.contiguous()))
 
-    def causal_attention(
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-    ) -> torch.Tensor:
+    def causal_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         return _GeoCausalAttentionFunction.apply(q, k, v)
 else:
     causal_attention = _unavailable
@@ -291,17 +261,9 @@ if _loss is not None:
 
     class _GeoCrossEntropyFunction(torch.autograd.Function):
         @staticmethod
-        def forward(
-            ctx,
-            logits: torch.Tensor,
-            targets: torch.Tensor,
-            ignore_index: int,
-        ) -> torch.Tensor:
-            logits_c = logits.contiguous()
-            targets_c = targets.contiguous()
-            loss, probabilities, normalizer = _loss.forward(
-                logits_c, targets_c, int(ignore_index)
-            )
+        def forward(ctx, logits: torch.Tensor, targets: torch.Tensor, ignore_index: int) -> torch.Tensor:
+            logits_c, targets_c = logits.contiguous(), targets.contiguous()
+            loss, probabilities, normalizer = _loss.forward(logits_c, targets_c, int(ignore_index))
             ctx.ignore_index = int(ignore_index)
             ctx.save_for_backward(probabilities, targets_c, normalizer)
             return loss
@@ -310,54 +272,52 @@ if _loss is not None:
         def backward(ctx, grad_output: torch.Tensor):
             probabilities, targets, normalizer = ctx.saved_tensors
             grad_logits = _loss.backward(
-                probabilities,
-                targets,
-                ctx.ignore_index,
-                normalizer,
-                grad_output.contiguous(),
+                probabilities, targets, ctx.ignore_index, normalizer, grad_output.contiguous()
             )
             return grad_logits, None, None
 
-    def cross_entropy(
-        logits: torch.Tensor,
-        targets: torch.Tensor,
-        ignore_index: int = -1,
-    ) -> torch.Tensor:
+    def cross_entropy(logits: torch.Tensor, targets: torch.Tensor, ignore_index: int = -1) -> torch.Tensor:
         return _GeoCrossEntropyFunction.apply(logits, targets, int(ignore_index))
 else:
     cross_entropy = _unavailable
 
 
+if _embedding is not None:
+    import torch
+
+    class _GeoEmbeddingFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, indices: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+            indices_c, weight_c = indices.contiguous(), weight.contiguous()
+            ctx.vocabulary = int(weight_c.shape[0])
+            ctx.dimension = int(weight_c.shape[1])
+            ctx.save_for_backward(indices_c)
+            return _embedding.forward(indices_c, weight_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            (indices,) = ctx.saved_tensors
+            grad_weight = _embedding.backward(
+                indices, grad_output.contiguous(), ctx.vocabulary, ctx.dimension
+            )
+            return None, grad_weight
+
+    def embedding(indices: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        return _GeoEmbeddingFunction.apply(indices, weight)
+else:
+    embedding = _unavailable
+
+
 __all__ = [
-    "ACTIVATION_CAPABILITIES",
-    "ACTIVATION_STAGE_CAPABILITIES",
-    "ATTENTION_CAPABILITIES",
-    "ATTENTION_STAGE_CAPABILITIES",
-    "CORE_CAPABILITIES",
-    "GEO_BACKEND",
-    "GEO_CAPABILITIES",
-    "GEO_CUDA_AVAILABLE",
-    "GEO_DL_RUNTIME_ABI_VERSION",
-    "GEO_OWNS_BACKWARD",
-    "LINEAR_CAPABILITIES",
-    "LOSS_CAPABILITIES",
-    "LOSS_STAGE_CAPABILITIES",
-    "POSITION_CAPABILITIES",
-    "POSITION_STAGE_CAPABILITIES",
-    "TRANSFORMER_CAPABILITIES",
-    "RuntimeCapabilities",
-    "add",
-    "apply_rope",
-    "build_rope",
-    "causal_attention",
-    "cross_entropy",
-    "gelu",
-    "linear",
-    "mul",
-    "native_available",
-    "native_capabilities",
-    "require_stage",
-    "rms_norm",
-    "scale",
-    "silu_mul",
+    "ACTIVATION_CAPABILITIES", "ACTIVATION_STAGE_CAPABILITIES",
+    "ATTENTION_CAPABILITIES", "ATTENTION_STAGE_CAPABILITIES",
+    "CORE_CAPABILITIES", "EMBEDDING_CAPABILITIES", "GEO_BACKEND",
+    "GEO_CAPABILITIES", "GEO_CUDA_AVAILABLE", "GEO_DL_RUNTIME_ABI_VERSION",
+    "GEO_OWNS_BACKWARD", "LINEAR_CAPABILITIES", "LOSS_CAPABILITIES",
+    "LOSS_STAGE_CAPABILITIES", "MODEL_STAGE_CAPABILITIES",
+    "POSITION_CAPABILITIES", "POSITION_STAGE_CAPABILITIES",
+    "TRANSFORMER_CAPABILITIES", "RuntimeCapabilities", "add", "apply_rope",
+    "build_rope", "causal_attention", "cross_entropy", "embedding", "gelu",
+    "linear", "mul", "native_available", "native_capabilities", "require_stage",
+    "rms_norm", "scale", "silu_mul",
 ]
