@@ -4,6 +4,7 @@ from .capabilities import (
     ACTIVATION_CAPABILITIES,
     ACTIVATION_STAGE_CAPABILITIES,
     ATTENTION_CAPABILITIES,
+    ATTENTION_STAGE_CAPABILITIES,
     CORE_CAPABILITIES,
     GEO_DL_RUNTIME_ABI_VERSION,
     LINEAR_CAPABILITIES,
@@ -25,6 +26,11 @@ try:
 except ImportError:
     _rope = None
 
+try:
+    from . import _attention
+except ImportError:
+    _attention = None
+
 
 def _validate_native_module(module, name: str) -> None:
     if module is None:
@@ -43,8 +49,11 @@ def _validate_native_module(module, name: str) -> None:
 
 _validate_native_module(_C, "geo_dl_runtime._C")
 _validate_native_module(_rope, "geo_dl_runtime._rope")
+_validate_native_module(_attention, "geo_dl_runtime._attention")
 
-_native_modules = tuple(module for module in (_C, _rope) if module is not None)
+_native_modules = tuple(
+    module for module in (_C, _rope, _attention) if module is not None
+)
 GEO_BACKEND = "GeometricElementaryOperators"
 GEO_OWNS_BACKWARD = bool(_C is not None) and all(
     bool(module.GEO_OWNS_BACKWARD) for module in _native_modules
@@ -234,10 +243,47 @@ else:
     build_rope = apply_rope = _unavailable
 
 
+if _attention is not None:
+    import torch
+
+    class _GeoCausalAttentionFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            q: torch.Tensor,
+            k: torch.Tensor,
+            v: torch.Tensor,
+        ) -> torch.Tensor:
+            q_c = q.contiguous()
+            k_c = k.contiguous()
+            v_c = v.contiguous()
+            output, probabilities = _attention.forward(q_c, k_c, v_c)
+            ctx.save_for_backward(q_c, k_c, v_c, probabilities)
+            return output
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            q, k, v, probabilities = ctx.saved_tensors
+            grad_q, grad_k, grad_v = _attention.backward(
+                q, k, v, probabilities, grad_output.contiguous()
+            )
+            return grad_q, grad_k, grad_v
+
+    def causal_attention(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+    ) -> torch.Tensor:
+        return _GeoCausalAttentionFunction.apply(q, k, v)
+else:
+    causal_attention = _unavailable
+
+
 __all__ = [
     "ACTIVATION_CAPABILITIES",
     "ACTIVATION_STAGE_CAPABILITIES",
     "ATTENTION_CAPABILITIES",
+    "ATTENTION_STAGE_CAPABILITIES",
     "CORE_CAPABILITIES",
     "GEO_BACKEND",
     "GEO_CAPABILITIES",
@@ -253,6 +299,7 @@ __all__ = [
     "add",
     "apply_rope",
     "build_rope",
+    "causal_attention",
     "gelu",
     "linear",
     "mul",
