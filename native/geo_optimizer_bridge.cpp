@@ -93,14 +93,21 @@ torch::Tensor geo_adamw_step(
 
     if (parameters[0].is_cuda()) {
 #ifdef WITH_CUDA
-        torch::Tensor sum_square = torch::zeros({}, parameters[0].options());
+        torch::Tensor sum_square = torch::empty({}, parameters[0].options());
+        cudaStream_t stream = at::cuda::getCurrentCUDAStream(
+            parameters[0].get_device()
+        ).stream();
+        TORCH_CHECK(
+            cudaMemsetAsync(sum_square.data_ptr<float>(), 0, sizeof(float), stream) == cudaSuccess,
+            "failed to initialize GEO AdamW gradient accumulator"
+        );
         for (size_t index = 0u; index < parameters.size(); ++index) {
             check_status(
                 geo_tensor_grad_square_cuda_accumulate(
                     gradients[index].data_ptr<float>(),
                     static_cast<size_t>(gradients[index].numel()),
                     sum_square.data_ptr<float>(),
-                    current_stream(parameters[index])
+                    reinterpret_cast<void *>(stream)
                 ),
                 "geo_tensor_grad_square_cuda_accumulate"
             );
@@ -110,7 +117,7 @@ torch::Tensor geo_adamw_step(
                 sum_square.data_ptr<float>(),
                 static_cast<float>(max_grad_norm),
                 clip_scale.data_ptr<float>(),
-                current_stream(parameters[0])
+                reinterpret_cast<void *>(stream)
             ),
             "geo_tensor_grad_clip_cuda_finalize"
         );
@@ -124,7 +131,7 @@ torch::Tensor geo_adamw_step(
                     static_cast<size_t>(parameters[index].numel()),
                     clip_scale.data_ptr<float>(),
                     config,
-                    current_stream(parameters[index])
+                    reinterpret_cast<void *>(stream)
                 ),
                 "geo_tensor_adamw_cuda_step"
             );
@@ -151,7 +158,7 @@ torch::Tensor geo_adamw_step(
             ),
             "geo_tensor_grad_clip_scale"
         );
-        clip_scale.fill_(clip);
+        *clip_scale.data_ptr<float>() = clip;
         for (size_t index = 0u; index < parameters.size(); ++index) {
             check_status(
                 geo_tensor_adamw_step(
