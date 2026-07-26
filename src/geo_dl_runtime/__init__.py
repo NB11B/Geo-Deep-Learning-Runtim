@@ -55,6 +55,22 @@ except ImportError:
 GEO_EXECUTION_DISPATCHER = getattr(_C, "GEO_EXECUTION_DISPATCHER", {}) if _C is not None else {}
 
 
+def get_attention_backend_counters() -> dict:
+    if _attention is not None and hasattr(_attention, "get_attention_backend_counters"):
+        return _attention.get_attention_backend_counters()
+    return {}
+
+
+def reset_attention_backend_counters() -> None:
+    if _attention is not None and hasattr(_attention, "reset_attention_backend_counters"):
+        _attention.reset_attention_backend_counters()
+
+
+def set_attention_perturbation(delta: float) -> None:
+    if _attention is not None and hasattr(_attention, "set_attention_perturbation"):
+        _attention.set_attention_perturbation(float(delta))
+
+
 def _validate_native_module(module, name: str) -> None:
     if module is None:
         return

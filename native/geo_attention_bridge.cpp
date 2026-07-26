@@ -271,7 +271,61 @@ torch::Tensor geo_attention_causal_streaming_forward(
     torch::Tensor k,
     torch::Tensor v
 ) {
-    return geo_attention_forward_no_probs(q, k, v);
+    check_tensor(q, "q");
+    check_tensor(k, "k");
+    check_tensor(v, "v");
+    const auto shape = make_attention_shape(q, k, v);
+    torch::Tensor output = torch::empty_like(q);
+    if (q.is_cuda()) {
+#ifdef WITH_CUDA
+        check_status(
+            geo_tensor_causal_attention_cuda_streaming_forward(
+                q.data_ptr<float>(),
+                k.data_ptr<float>(),
+                v.data_ptr<float>(),
+                output.data_ptr<float>(),
+                shape,
+                current_stream(q)
+            ),
+            "geo_tensor_causal_attention_cuda_streaming_forward"
+        );
+#else
+        TORCH_CHECK(false, "runtime was built without CUDA support");
+#endif
+    } else {
+        torch::Tensor probs = torch::empty({static_cast<std::int64_t>(shape.outer), static_cast<std::int64_t>(shape.tokens), static_cast<std::int64_t>(shape.tokens)}, q.options());
+        check_status(
+            geo_tensor_causal_attention_forward(
+                q.data_ptr<float>(),
+                k.data_ptr<float>(),
+                v.data_ptr<float>(),
+                output.data_ptr<float>(),
+                probs.data_ptr<float>(),
+                shape
+            ),
+            "geo_tensor_causal_attention_forward"
+        );
+    }
+    return output;
+}
+
+pybind11::dict py_get_attention_counters() {
+    geo_attention_backend_counters c;
+    geo_tensor_causal_attention_get_counters(&c);
+    pybind11::dict res;
+    res["n_save_forward_calls"] = c.n_save_forward_calls;
+    res["n_recompute_forward_calls"] = c.n_recompute_forward_calls;
+    res["n_streaming_forward_calls"] = c.n_streaming_forward_calls;
+    res["n_backward_calls"] = c.n_backward_calls;
+    return res;
+}
+
+void py_reset_attention_counters() {
+    geo_tensor_causal_attention_reset_counters();
+}
+
+void py_set_attention_perturbation(float delta) {
+    geo_tensor_causal_attention_set_perturbation(delta);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
@@ -280,6 +334,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("causal_attention_streaming_forward", &geo_attention_causal_streaming_forward);
     module.def("backward", &geo_attention_backward);
     module.def("backward_profiled", &geo_attention_backward_profiled);
+    module.def("get_attention_backend_counters", &py_get_attention_counters);
+    module.def("reset_attention_backend_counters", &py_reset_attention_counters);
+    module.def("set_attention_perturbation", &py_set_attention_perturbation);
     module.attr("GEO_DL_RUNTIME_ABI_VERSION") = 1;
     module.attr("GEO_BACKEND") = "GeometricElementaryOperators";
     module.attr("GEO_OWNS_BACKWARD") = true;
