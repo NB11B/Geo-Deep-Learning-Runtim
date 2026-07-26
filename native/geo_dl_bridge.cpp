@@ -55,6 +55,59 @@ geo_tensor_norm_shape make_norm_shape(const torch::Tensor &x, const torch::Tenso
     return {static_cast<size_t>(rows), static_cast<size_t>(x.size(-1))};
 }
 
+struct GeoDispatchTelemetry {
+    std::string op_name = "none";
+    std::string shape = "none";
+    std::string requested_mode = "default";
+    std::string selected_backend = "none";
+    std::string reason = "none";
+    std::string algorithm_id = "none";
+    size_t workspace_bytes = 0;
+    bool full_matrix_allocated = false;
+    bool fallback = false;
+    std::string fallback_reason = "";
+};
+
+static thread_local GeoDispatchTelemetry tls_last_dispatch;
+
+pybind11::dict get_last_dispatch_telemetry() {
+    pybind11::dict res;
+    res["operator"] = tls_last_dispatch.op_name;
+    res["shape"] = tls_last_dispatch.shape;
+    res["requested_mode"] = tls_last_dispatch.requested_mode;
+    res["selected_backend"] = tls_last_dispatch.selected_backend;
+    res["reason"] = tls_last_dispatch.reason;
+    res["algorithm_id"] = tls_last_dispatch.algorithm_id;
+    res["workspace_bytes"] = tls_last_dispatch.workspace_bytes;
+    res["full_matrix_allocated"] = tls_last_dispatch.full_matrix_allocated;
+    res["fallback"] = tls_last_dispatch.fallback;
+    res["fallback_reason"] = tls_last_dispatch.fallback_reason;
+    return res;
+}
+
+void record_linear_telemetry(const char *op, const geo_tensor_linear_shape &shape, bool is_cuda) {
+    tls_last_dispatch.op_name = op;
+    tls_last_dispatch.shape = "M=" + std::to_string(shape.rows) + ",K=" + std::to_string(shape.in_features) + ",N=" + std::to_string(shape.out_features);
+    tls_last_dispatch.requested_mode = "default";
+    if (is_cuda && shape.out_features >= 512) {
+        tls_last_dispatch.selected_backend = "cuBLAS Tensor Cores";
+        tls_last_dispatch.reason = "wide_output_threshold_ge_512";
+        tls_last_dispatch.algorithm_id = "cublasSgemm_v2";
+    } else if (is_cuda) {
+        tls_last_dispatch.selected_backend = "GEO Vectorized CUDA Kernel";
+        tls_last_dispatch.reason = "small_output_dim_lt_512";
+        tls_last_dispatch.algorithm_id = "geo_tensor_linear_forward_kernel";
+    } else {
+        tls_last_dispatch.selected_backend = "GEO CPU C Kernel";
+        tls_last_dispatch.reason = "host_cpu_execution";
+        tls_last_dispatch.algorithm_id = "geo_tensor_linear_forward";
+    }
+    tls_last_dispatch.workspace_bytes = 0;
+    tls_last_dispatch.full_matrix_allocated = false;
+    tls_last_dispatch.fallback = false;
+    tls_last_dispatch.fallback_reason = "";
+}
+
 }  // namespace
 
 torch::Tensor geo_linear_forward(torch::Tensor x, torch::Tensor weight) {
@@ -62,6 +115,7 @@ torch::Tensor geo_linear_forward(torch::Tensor x, torch::Tensor weight) {
     check_tensor(weight, "weight");
     TORCH_CHECK(x.device() == weight.device(), "x and weight must be on the same device");
     const auto shape = make_linear_shape(x, weight);
+    record_linear_telemetry("linear_forward", shape, x.is_cuda());
     std::vector<std::int64_t> output_shape(x.sizes().begin(), x.sizes().end());
     output_shape.back() = weight.size(0);
     torch::Tensor output = torch::empty(output_shape, x.options());
@@ -83,6 +137,7 @@ std::vector<torch::Tensor> geo_linear_backward(torch::Tensor x, torch::Tensor we
     check_tensor(grad_output, "grad_output");
     TORCH_CHECK(x.device() == weight.device() && x.device() == grad_output.device(), "all tensors must share a device");
     const auto shape = make_linear_shape(x, weight);
+    record_linear_telemetry("linear_backward", shape, x.is_cuda());
     torch::Tensor grad_x = torch::empty_like(x);
     torch::Tensor grad_weight = torch::empty_like(weight);
     if (x.is_cuda()) {
@@ -344,6 +399,7 @@ std::map<std::string, double> geo_linear_backward_decomposed_profile(torch::Tens
 #endif
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
+    module.def("get_last_dispatch_telemetry", &get_last_dispatch_telemetry);
     module.def("linear_forward", &geo_linear_forward);
     module.def("linear_backward", &geo_linear_backward);
 #ifdef WITH_CUDA
