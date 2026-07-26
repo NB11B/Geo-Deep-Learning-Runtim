@@ -403,7 +403,9 @@ if _attention is not None:
         v: torch.Tensor,
         recompute_probs: bool = False,
     ) -> torch.Tensor:
-        if q.shape[2] != k.shape[2]:
+        if k.shape != v.shape or (q.shape[2] != k.shape[2] and q.shape[2] != 1):
+            raise RuntimeError("q, k, and v shapes must match")
+        if q.shape[2] == 1 and q.shape[2] != k.shape[2]:
             scale = 1.0 / math.sqrt(q.shape[-1])
             scores = torch.matmul(q, k.transpose(-2, -1)) * scale
             probs = torch.softmax(scores, dim=-1)
@@ -419,7 +421,7 @@ if _attention is not None:
         mode: str = "auto",
     ) -> torch.Tensor:
         global _last_attention_telemetry
-        if q.shape[2] != k.shape[2]:
+        if q.shape[2] == 1 and q.shape[2] != k.shape[2] and k.shape == v.shape:
             _last_attention_telemetry = {
                 "selected_backend": "kv_cache_decode",
                 "reason": "single_token_decoding_step",
@@ -427,6 +429,7 @@ if _attention is not None:
                 "k_shape": list(k.shape),
             }
             return causal_attention(q, k, v)
+
 
         B, H, T, D = q.shape
 
