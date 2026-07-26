@@ -110,6 +110,57 @@ std::vector<torch::Tensor> geo_attention_forward(
     return {out, probabilities};
 }
 
+std::tuple<torch::Tensor, torch::Tensor> geo_attention_forward_recompute(
+    torch::Tensor q,
+    torch::Tensor k,
+    torch::Tensor v
+) {
+    check_tensor(q, "q");
+    check_tensor(k, "k");
+    check_tensor(v, "v");
+    const auto shape = make_attention_shape(q, k, v);
+
+    torch::Tensor out = torch::empty_like(q);
+    torch::Tensor probabilities = torch::empty(
+        {static_cast<std::int64_t>(shape.outer),
+         static_cast<std::int64_t>(shape.tokens),
+         static_cast<std::int64_t>(shape.tokens)},
+        q.options()
+    );
+
+    if (q.is_cuda()) {
+#ifdef WITH_CUDA
+        check_status(
+            geo_tensor_causal_attention_cuda_forward_recompute(
+                q.data_ptr<float>(),
+                k.data_ptr<float>(),
+                v.data_ptr<float>(),
+                out.data_ptr<float>(),
+                probabilities.data_ptr<float>(),
+                shape,
+                current_stream(q)
+            ),
+            "geo_tensor_causal_attention_cuda_forward_recompute"
+        );
+#else
+        TORCH_CHECK(false, "runtime was built without CUDA support");
+#endif
+    } else {
+        check_status(
+            geo_tensor_causal_attention_forward(
+                q.data_ptr<float>(),
+                k.data_ptr<float>(),
+                v.data_ptr<float>(),
+                out.data_ptr<float>(),
+                probabilities.data_ptr<float>(),
+                shape
+            ),
+            "geo_tensor_causal_attention_forward"
+        );
+    }
+    return {out, probabilities};
+}
+
 torch::Tensor geo_attention_forward_no_probs(
     torch::Tensor q,
     torch::Tensor k,
@@ -374,6 +425,7 @@ std::vector<torch::Tensor> geo_attention_causal_streaming_vjp(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("forward", &geo_attention_forward);
+    module.def("forward_recompute", &geo_attention_forward_recompute);
     module.def("forward_no_probs", &geo_attention_forward_no_probs);
     module.def("causal_attention_streaming_forward", &geo_attention_causal_streaming_forward);
     module.def("causal_attention_streaming_vjp", &geo_attention_causal_streaming_vjp);

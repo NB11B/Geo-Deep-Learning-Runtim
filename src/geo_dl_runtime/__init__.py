@@ -355,7 +355,7 @@ if _attention is not None:
         def backward(ctx, grad_output: torch.Tensor):
             if ctx.recompute_probs:
                 q, k, v = ctx.saved_tensors
-                _, probabilities = _attention.forward(q, k, v)
+                _, probabilities = _attention.forward_recompute(q, k, v)
             else:
                 q, k, v, probabilities = ctx.saved_tensors
 
