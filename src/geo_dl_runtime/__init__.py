@@ -638,8 +638,8 @@ from .optim import GeoAdamW
 
 class _GeoImplicitLinearFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, u, v, alpha, perm_indices, sign_mask):
-        ctx.save_for_backward(x, u, v, alpha, perm_indices, sign_mask)
+    def forward(ctx, x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask):
+        ctx.save_for_backward(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
         batch, tokens, _ = x.shape
         out_features = u.shape[1]
         rank = u.shape[0]
@@ -653,7 +653,7 @@ class _GeoImplicitLinearFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, u, v, alpha, perm_indices, sign_mask = ctx.saved_tensors
+        x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask = ctx.saved_tensors
         batch, tokens, in_features = x.shape
         rank, out_features = u.shape
 
@@ -676,25 +676,26 @@ class _GeoImplicitLinearFunction(torch.autograd.Function):
             grad_v[i] = torch.sum(x_perm * g_proj_v, dim=(0, 1))
 
             g_x_perm = torch.matmul(g_proj_v, v[i].unsqueeze(0)) * sign_mask[i]
-            inv_perm = torch.argsort(perm_indices[i])
-            grad_x += g_x_perm[:, :, inv_perm]
+            grad_x += g_x_perm[:, :, inv_perm_indices[i]]
 
-        return grad_x, grad_u, grad_v, grad_alpha, None, None
+        return grad_x, grad_u, grad_v, grad_alpha, None, None, None
 
 
 _last_implicit_telemetry = {}
 
 
-def implicit_linear(x: torch.Tensor, u: torch.Tensor, v: torch.Tensor, alpha: torch.Tensor, perm_indices: torch.Tensor, sign_mask: torch.Tensor) -> torch.Tensor:
+def implicit_linear(x: torch.Tensor, u: torch.Tensor, v: torch.Tensor, alpha: torch.Tensor, perm_indices: torch.Tensor, inv_perm_indices: torch.Tensor, sign_mask: torch.Tensor) -> torch.Tensor:
     global _last_implicit_telemetry
     _last_implicit_telemetry = {
-        "selected_backend": "geo_native_implicit_linear",
+        "selected_backend": "geo_torch_implicit_linear",
+        "implementation_owner": "geo_dl_runtime",
+        "execution_backend": "pytorch_cuda",
         "dense_matrix_materialized": False,
-        "fallback": False,
         "x_shape": list(x.shape),
         "rank": u.shape[0],
     }
-    return _GeoImplicitLinearFunction.apply(x, u, v, alpha, perm_indices, sign_mask)
+    return _GeoImplicitLinearFunction.apply(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
+
 
 
 __all__ = [
