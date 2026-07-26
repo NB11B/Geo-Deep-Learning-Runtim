@@ -636,7 +636,69 @@ else:
 from .optim import GeoAdamW
 
 
+class _GeoImplicitLinearFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, u, v, alpha, perm_indices, sign_mask):
+        ctx.save_for_backward(x, u, v, alpha, perm_indices, sign_mask)
+        batch, tokens, _ = x.shape
+        out_features = u.shape[1]
+        rank = u.shape[0]
+        out = torch.zeros(batch, tokens, out_features, device=x.device, dtype=x.dtype)
+        for i in range(rank):
+            x_perm = x[:, :, perm_indices[i]] * sign_mask[i]
+            proj_v = torch.matmul(x_perm, v[i].unsqueeze(1))
+            proj_u = torch.matmul(proj_v, u[i].unsqueeze(0))
+            out = out + alpha[i] * proj_u
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, u, v, alpha, perm_indices, sign_mask = ctx.saved_tensors
+        batch, tokens, in_features = x.shape
+        rank, out_features = u.shape
+
+        grad_x = torch.zeros_like(x)
+        grad_u = torch.zeros_like(u)
+        grad_v = torch.zeros_like(v)
+        grad_alpha = torch.zeros_like(alpha)
+
+        for i in range(rank):
+            x_perm = x[:, :, perm_indices[i]] * sign_mask[i]
+            proj_v = torch.matmul(x_perm, v[i].unsqueeze(1))
+
+            proj_u = torch.matmul(proj_v, u[i].unsqueeze(0))
+            grad_alpha[i] = torch.sum(grad_output * proj_u)
+
+            g_out_scaled = alpha[i] * grad_output
+            grad_u[i] = torch.sum(g_out_scaled * proj_v, dim=(0, 1))
+
+            g_proj_v = torch.matmul(g_out_scaled, u[i].unsqueeze(1))
+            grad_v[i] = torch.sum(x_perm * g_proj_v, dim=(0, 1))
+
+            g_x_perm = torch.matmul(g_proj_v, v[i].unsqueeze(0)) * sign_mask[i]
+            inv_perm = torch.argsort(perm_indices[i])
+            grad_x += g_x_perm[:, :, inv_perm]
+
+        return grad_x, grad_u, grad_v, grad_alpha, None, None
+
+
+_last_implicit_telemetry = {}
+
+
+def implicit_linear(x: torch.Tensor, u: torch.Tensor, v: torch.Tensor, alpha: torch.Tensor, perm_indices: torch.Tensor, sign_mask: torch.Tensor) -> torch.Tensor:
+    global _last_implicit_telemetry
+    _last_implicit_telemetry = {
+        "selected_backend": "geo_native_implicit_linear",
+        "dense_matrix_materialized": False,
+        "fallback": False,
+        "x_shape": list(x.shape),
+        "rank": u.shape[0],
+    }
+    return _GeoImplicitLinearFunction.apply(x, u, v, alpha, perm_indices, sign_mask)
+
+
 __all__ = [
+
     "ACTIVATION_CAPABILITIES",
     "ACTIVATION_STAGE_CAPABILITIES",
     "ATTENTION_CAPABILITIES",
@@ -666,6 +728,7 @@ __all__ = [
     "cross_entropy",
     "embedding",
     "gelu",
+    "implicit_linear",
     "linear",
     "mul",
     "native_available",
@@ -675,3 +738,4 @@ __all__ = [
     "scale",
     "silu_mul",
 ]
+
