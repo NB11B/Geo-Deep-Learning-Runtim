@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from .capabilities import (
     ACTIVATION_CAPABILITIES,
     ACTIVATION_STAGE_CAPABILITIES,
@@ -401,6 +403,11 @@ if _attention is not None:
         v: torch.Tensor,
         recompute_probs: bool = False,
     ) -> torch.Tensor:
+        if q.shape[2] != k.shape[2]:
+            scale = 1.0 / math.sqrt(q.shape[-1])
+            scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+            probs = torch.softmax(scores, dim=-1)
+            return torch.matmul(probs, v)
         return _GeoCausalAttentionFunction.apply(q, k, v, bool(recompute_probs))
 
     _last_attention_telemetry = {}
@@ -412,6 +419,15 @@ if _attention is not None:
         mode: str = "auto",
     ) -> torch.Tensor:
         global _last_attention_telemetry
+        if q.shape[2] != k.shape[2]:
+            _last_attention_telemetry = {
+                "selected_backend": "kv_cache_decode",
+                "reason": "single_token_decoding_step",
+                "q_shape": list(q.shape),
+                "k_shape": list(k.shape),
+            }
+            return causal_attention(q, k, v)
+
         B, H, T, D = q.shape
 
         est_full_matrix_bytes = B * H * T * T * 4 * 2
@@ -443,6 +459,7 @@ if _attention is not None:
             else:
                 selected_backend = "recompute_probs"
                 reason = "latency_optimal_recompute_fits_in_vram"
+
 
         _last_attention_telemetry = {
             "requested_mode": mode,
