@@ -150,3 +150,38 @@ def test_geo_adamw_rejects_non_float32_parameters():
     parameter.grad = torch.ones_like(parameter)
     with pytest.raises(RuntimeError, match="float32"):
         optimizer.step()
+
+
+@pytest.mark.parametrize("device", devices())
+def test_fused_adamw_zero_gradient_behavior(device: torch.device):
+    parameter = torch.nn.Parameter(torch.randn(4, 4, device=device))
+    original = parameter.detach().clone()
+    optimizer = runtime.GeoAdamW([parameter], weight_decay=0.0)
+    parameter.grad = torch.zeros_like(parameter)
+    optimizer.step()
+    torch.testing.assert_close(parameter, original)
+
+
+@pytest.mark.parametrize("device", devices())
+def test_fused_adamw_weight_decay_toggle(device: torch.device):
+    parameter = torch.nn.Parameter(torch.ones(4, device=device))
+    optimizer = runtime.GeoAdamW([parameter], learning_rate=0.1, weight_decay=0.1)
+    parameter.grad = torch.zeros_like(parameter)
+    optimizer.step()
+    # P = P * (1 - lr * wd) = 1.0 * (1 - 0.1 * 0.1) = 0.99
+    torch.testing.assert_close(parameter, torch.full_like(parameter, 0.99))
+
+
+@pytest.mark.parametrize("device", devices())
+def test_fused_adamw_mixed_tensor_sizes(device: torch.device):
+    params = [
+        torch.nn.Parameter(torch.randn(100, 50, device=device)),
+        torch.nn.Parameter(torch.randn(8, device=device)),
+        torch.nn.Parameter(torch.randn(1024, 64, device=device)),
+    ]
+    for p in params:
+        p.grad = torch.randn_like(p)
+    optimizer = runtime.GeoAdamW(params, learning_rate=1e-3, weight_decay=0.01)
+    scale = optimizer.step()
+    assert scale is not None
+

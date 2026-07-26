@@ -66,10 +66,10 @@ void validate_lists(
 }  // namespace
 
 torch::Tensor geo_adamw_step(
-    std::vector<torch::Tensor> parameters,
-    std::vector<torch::Tensor> gradients,
-    std::vector<torch::Tensor> first_moments,
-    std::vector<torch::Tensor> second_moments,
+    const std::vector<torch::Tensor> &parameters,
+    const std::vector<torch::Tensor> &gradients,
+    const std::vector<torch::Tensor> &first_moments,
+    const std::vector<torch::Tensor> &second_moments,
     std::uint64_t step,
     double learning_rate,
     double beta1,
@@ -138,31 +138,48 @@ torch::Tensor geo_adamw_step(
             h_counts[i] = static_cast<size_t>(parameters[i].numel());
         }
 
-        float **d_params = nullptr;
-        const float **d_grads = nullptr;
-        float **d_m1 = nullptr;
-        float **d_m2 = nullptr;
-        size_t *d_counts = nullptr;
+        struct DevicePointerCache {
+            float **d_params = nullptr;
+            const float **d_grads = nullptr;
+            float **d_m1 = nullptr;
+            float **d_m2 = nullptr;
+            size_t *d_counts = nullptr;
+            size_t capacity = 0u;
 
-        cudaMallocAsync(&d_params, num_tensors * sizeof(float *), stream);
-        cudaMallocAsync(&d_grads, num_tensors * sizeof(float *), stream);
-        cudaMallocAsync(&d_m1, num_tensors * sizeof(float *), stream);
-        cudaMallocAsync(&d_m2, num_tensors * sizeof(float *), stream);
-        cudaMallocAsync(&d_counts, num_tensors * sizeof(size_t), stream);
+            void reserve(size_t n, cudaStream_t stream) {
+                if (n > capacity) {
+                    if (d_params) cudaFreeAsync(d_params, stream);
+                    if (d_grads) cudaFreeAsync(const_cast<float**>(d_grads), stream);
+                    if (d_m1) cudaFreeAsync(d_m1, stream);
+                    if (d_m2) cudaFreeAsync(d_m2, stream);
+                    if (d_counts) cudaFreeAsync(d_counts, stream);
 
-        cudaMemcpyAsync(d_params, h_params.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_grads, h_grads.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_m1, h_m1.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_m2, h_m2.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_counts, h_counts.data(), num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+                    cudaMallocAsync(&d_params, n * sizeof(float *), stream);
+                    cudaMallocAsync(&d_grads, n * sizeof(float *), stream);
+                    cudaMallocAsync(&d_m1, n * sizeof(float *), stream);
+                    cudaMallocAsync(&d_m2, n * sizeof(float *), stream);
+                    cudaMallocAsync(&d_counts, n * sizeof(size_t), stream);
+                    capacity = n;
+                }
+            }
+        };
+
+        thread_local DevicePointerCache cache;
+        cache.reserve(num_tensors, stream);
+
+        cudaMemcpyAsync(cache.d_params, h_params.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(const_cast<float**>(cache.d_grads), h_grads.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(cache.d_m1, h_m1.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(cache.d_m2, h_m2.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(cache.d_counts, h_counts.data(), num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
 
         check_status(
             geo_tensor_adamw_cuda_step_fused(
-                d_params,
-                d_grads,
-                d_m1,
-                d_m2,
-                d_counts,
+                cache.d_params,
+                cache.d_grads,
+                cache.d_m1,
+                cache.d_m2,
+                cache.d_counts,
                 num_tensors,
                 clip_ptr,
                 config,
@@ -170,12 +187,6 @@ torch::Tensor geo_adamw_step(
             ),
             "geo_tensor_adamw_cuda_step_fused"
         );
-
-        cudaFreeAsync(d_params, stream);
-        cudaFreeAsync(d_grads, stream);
-        cudaFreeAsync(d_m1, stream);
-        cudaFreeAsync(d_m2, stream);
-        cudaFreeAsync(d_counts, stream);
 #else
         TORCH_CHECK(false, "runtime was built without CUDA support");
 #endif
