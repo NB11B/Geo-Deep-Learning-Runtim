@@ -72,6 +72,7 @@ def extension(name: str, bridge: str, cpu_sources: list[str], cuda_sources: list
         name=name,
         sources=rel_sources,
         include_dirs=[str(GEO_ROOT / "include")],
+        libraries=["cublas"],
         define_macros=common_macros,
         extra_compile_args=common_compile_args,
     )
