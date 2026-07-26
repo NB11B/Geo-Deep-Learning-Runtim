@@ -464,6 +464,70 @@ if _attention is not None:
     def get_last_attention_dispatch_telemetry() -> dict:
         return dict(_last_attention_telemetry)
 
+    class GeoActivationPackage:
+        def __init__(self, microbatch_id: int, saved_tensors: dict, loss_seed: torch.Tensor):
+            self.microbatch_id = microbatch_id
+            self.saved_tensors = saved_tensors
+            self.loss_seed = loss_seed
+            self.ready_event = torch.cuda.Event() if torch.cuda.is_available() else None
+            if self.ready_event:
+                self.ready_event.record()
+
+    class GeoGradientPackage:
+        def __init__(self, microbatch_id: int, gradients: dict, global_norm: float, finite: bool):
+            self.microbatch_id = microbatch_id
+            self.gradients = gradients
+            self.global_norm = global_norm
+            self.finite = finite
+            self.ready_event = torch.cuda.Event() if torch.cuda.is_available() else None
+            if self.ready_event:
+                self.ready_event.record()
+
+    class GeoForwardExecutor:
+        def __init__(self):
+            self.stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+
+        def execute_forward(self, model, x, y, microbatch_id: int) -> GeoActivationPackage:
+            if self.stream:
+                with torch.cuda.stream(self.stream):
+                    _, loss = model(x, y)
+                    pkg = GeoActivationPackage(microbatch_id, {"x": x, "y": y}, loss)
+                    return pkg
+            else:
+                _, loss = model(x, y)
+                return GeoActivationPackage(microbatch_id, {"x": x, "y": y}, loss)
+
+    class GeoBackwardExecutor:
+        def __init__(self):
+            self.stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+
+        def execute_backward(self, activation_pkg: GeoActivationPackage) -> GeoGradientPackage:
+            if activation_pkg.ready_event:
+                activation_pkg.ready_event.synchronize()
+
+            if self.stream:
+                with torch.cuda.stream(self.stream):
+                    activation_pkg.loss_seed.backward()
+                    pkg = GeoGradientPackage(activation_pkg.microbatch_id, {}, 1.0, True)
+                    return pkg
+            else:
+                activation_pkg.loss_seed.backward()
+                return GeoGradientPackage(activation_pkg.microbatch_id, {}, 1.0, True)
+
+    class GeoUpdateExecutor:
+        def __init__(self):
+            self.stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+
+        def execute_update(self, optimizer, grad_pkg: GeoGradientPackage):
+            if grad_pkg.ready_event:
+                grad_pkg.ready_event.synchronize()
+
+            if self.stream:
+                with torch.cuda.stream(self.stream):
+                    optimizer.step()
+            else:
+                optimizer.step()
+
 else:
     causal_attention = _unavailable
 
