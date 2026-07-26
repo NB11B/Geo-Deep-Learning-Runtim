@@ -318,33 +318,43 @@ if _attention is not None:
             q: torch.Tensor,
             k: torch.Tensor,
             v: torch.Tensor,
+            recompute_probs: bool = False,
         ) -> torch.Tensor:
             q_c = q.contiguous()
             k_c = k.contiguous()
             v_c = v.contiguous()
             output, probabilities = _attention.forward(q_c, k_c, v_c)
-            ctx.save_for_backward(q_c, k_c, v_c, probabilities)
+            ctx.recompute_probs = bool(recompute_probs)
+            if recompute_probs:
+                ctx.save_for_backward(q_c, k_c, v_c)
+            else:
+                ctx.save_for_backward(q_c, k_c, v_c, probabilities)
             return output
 
         @staticmethod
         def backward(ctx, grad_output: torch.Tensor):
-            q, k, v, probabilities = ctx.saved_tensors
-            return tuple(
-                _attention.backward(
-                    q,
-                    k,
-                    v,
-                    probabilities,
-                    grad_output.contiguous(),
-                )
+            if ctx.recompute_probs:
+                q, k, v = ctx.saved_tensors
+                _, probabilities = _attention.forward(q, k, v)
+            else:
+                q, k, v, probabilities = ctx.saved_tensors
+
+            gq, gk, gv = _attention.backward(
+                q,
+                k,
+                v,
+                probabilities,
+                grad_output.contiguous(),
             )
+            return gq, gk, gv, None
 
     def causal_attention(
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
+        recompute_probs: bool = False,
     ) -> torch.Tensor:
-        return _GeoCausalAttentionFunction.apply(q, k, v)
+        return _GeoCausalAttentionFunction.apply(q, k, v, bool(recompute_probs))
 else:
     causal_attention = _unavailable
 
