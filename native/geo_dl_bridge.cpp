@@ -327,6 +327,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.attr("GEO_BACKEND") = "GeometricElementaryOperators";
     module.attr("GEO_OWNS_BACKWARD") = true;
     module.attr("GEO_CAPABILITIES") = pybind11::make_tuple("linear", "add", "mul", "scale", "rms_norm", "gelu", "silu_mul");
+    
+    pybind11::dict dispatcher;
+    dispatcher["linear"] = "Adaptive: cuBLAS Tensor Cores (N >= 512) | GEO Vectorized Kernel (N < 512)";
+    dispatcher["attention"] = "GEO Recomputation Tiled Causal Attention Kernel";
+    dispatcher["loss"] = "GEO Parallel Block-Reduction Cross-Entropy (V > 512) | Serial (V <= 512)";
+    dispatcher["optimizer"] = "GEO Single-Launch Fused Multi-Tensor GeoAdamW + Fused Norm Clipping";
+    module.attr("GEO_EXECUTION_DISPATCHER") = dispatcher;
+
 #ifdef WITH_CUDA
     module.attr("GEO_CUDA_AVAILABLE") = true;
 #else

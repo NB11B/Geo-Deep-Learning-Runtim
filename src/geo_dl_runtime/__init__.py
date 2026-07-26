@@ -52,6 +52,9 @@ except ImportError:
     _optimizer = None
 
 
+GEO_EXECUTION_DISPATCHER = getattr(_C, "GEO_EXECUTION_DISPATCHER", {}) if _C is not None else {}
+
+
 def _validate_native_module(module, name: str) -> None:
     if module is None:
         return
