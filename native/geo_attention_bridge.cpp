@@ -423,12 +423,67 @@ std::vector<torch::Tensor> geo_attention_causal_streaming_vjp(
     return {grad_q, grad_k, grad_v};
 }
 
+pybind11::tuple geo_attention_causal_streaming_vjp_profiled(
+    torch::Tensor q,
+    torch::Tensor k,
+    torch::Tensor v,
+    torch::Tensor out,
+    torch::Tensor grad_output
+) {
+    check_tensor(q, "q");
+    check_tensor(k, "k");
+    check_tensor(v, "v");
+    check_tensor(out, "out");
+    check_tensor(grad_output, "grad_output");
+    const auto shape = make_attention_shape(q, k, v);
+    torch::Tensor grad_q = torch::empty_like(q);
+    torch::Tensor grad_k = torch::empty_like(k);
+    torch::Tensor grad_v = torch::empty_like(v);
+
+    geo_attention_streaming_vjp_timings timings{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    if (q.is_cuda()) {
+#ifdef WITH_CUDA
+        check_status(
+            geo_tensor_causal_attention_cuda_streaming_vjp_profiled(
+                q.data_ptr<float>(),
+                k.data_ptr<float>(),
+                v.data_ptr<float>(),
+                out.data_ptr<float>(),
+                grad_output.data_ptr<float>(),
+                grad_q.data_ptr<float>(),
+                grad_k.data_ptr<float>(),
+                grad_v.data_ptr<float>(),
+                &timings,
+                shape,
+                current_stream(q)
+            ),
+            "geo_tensor_causal_attention_cuda_streaming_vjp_profiled"
+        );
+#else
+        TORCH_CHECK(false, "runtime was built without CUDA support");
+#endif
+    } else {
+        TORCH_CHECK(false, "CPU streaming VJP not implemented");
+    }
+
+    auto grads = pybind11::make_tuple(grad_q, grad_k, grad_v);
+    auto time_dict = pybind11::dict();
+    time_dict["t_di_us"] = timings.t_di_ms * 1000.0f;
+    time_dict["t_score_recompute_us"] = timings.t_score_recompute_ms * 1000.0f;
+    time_dict["t_dq_us"] = timings.t_dq_ms * 1000.0f;
+    time_dict["t_dk_dv_atomic_us"] = timings.t_dk_dv_atomic_ms * 1000.0f;
+    time_dict["t_total_us"] = timings.t_total_ms * 1000.0f;
+    return pybind11::make_tuple(grads, time_dict);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("forward", &geo_attention_forward);
     module.def("forward_recompute", &geo_attention_forward_recompute);
     module.def("forward_no_probs", &geo_attention_forward_no_probs);
     module.def("causal_attention_streaming_forward", &geo_attention_causal_streaming_forward);
     module.def("causal_attention_streaming_vjp", &geo_attention_causal_streaming_vjp);
+    module.def("causal_attention_streaming_vjp_profiled", &geo_attention_causal_streaming_vjp_profiled);
     module.def("backward", &geo_attention_backward);
     module.def("backward_profiled", &geo_attention_backward_profiled);
     module.def("get_attention_backend_counters", &py_get_attention_counters);

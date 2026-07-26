@@ -1,0 +1,25 @@
+{
+  "policy_name": "SM120 Hardware & Memory-Pressure Adaptive Attention Dispatcher Policy",
+  "policy_version": "1.0.0",
+  "arch": "sm_120",
+  "device_memory_mb": 8188.0,
+  "memory_safety_threshold_pct": 0.70,
+  "crossover_regions": {
+    "small_context": {
+      "t_max": 256,
+      "recommended_backend": "recompute_probs",
+      "reason": "Fastest latency backend with low memory footprint"
+    },
+    "medium_context": {
+      "t_min": 257,
+      "t_max": 1024,
+      "recommended_backend": "recompute_probs",
+      "reason": "Preferred latency backend while transient memory fits within safe GPU bounds"
+    },
+    "long_context_or_memory_pressure": {
+      "t_min": 1025,
+      "recommended_backend": "streaming",
+      "reason": "Linear O(B*H*T*D) memory safe backend"
+    }
+  }
+}

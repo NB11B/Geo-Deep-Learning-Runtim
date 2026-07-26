@@ -403,6 +403,67 @@ if _attention is not None:
     ) -> torch.Tensor:
         return _GeoCausalAttentionFunction.apply(q, k, v, bool(recompute_probs))
 
+    _last_attention_telemetry = {}
+
+    def adaptive_causal_attention(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        mode: str = "auto",
+    ) -> torch.Tensor:
+        global _last_attention_telemetry
+        B, H, T, D = q.shape
+
+        est_full_matrix_bytes = B * H * T * T * 4 * 2
+        
+        total_mem = 0
+        free_mem = 0
+        if torch.cuda.is_available() and q.is_cuda:
+            free_mem, total_mem = torch.cuda.mem_get_info()
+
+        selected_backend = "recompute_probs"
+        reason = "default_latency_optimal"
+
+        if mode == "streaming":
+            selected_backend = "streaming"
+            reason = "user_explicit_streaming"
+        elif mode == "save_probs":
+            selected_backend = "save_probs"
+            reason = "user_explicit_save_probs"
+        elif mode == "recompute_probs":
+            selected_backend = "recompute_probs"
+            reason = "user_explicit_recompute_probs"
+        else:
+            if T >= 2048:
+                selected_backend = "streaming"
+                reason = "sequence_length_exceeds_2048_threshold"
+            elif est_full_matrix_bytes > (0.70 * free_mem) and free_mem > 0:
+                selected_backend = "streaming"
+                reason = "estimated_fullmatrix_bytes_exceed_70pct_free_memory"
+            else:
+                selected_backend = "recompute_probs"
+                reason = "latency_optimal_recompute_fits_in_vram"
+
+        _last_attention_telemetry = {
+            "requested_mode": mode,
+            "selected_backend": selected_backend,
+            "selection_reason": reason,
+            "shape": f"B={B},H={H},T={T},D={D}",
+            "estimated_full_matrix_bytes": est_full_matrix_bytes,
+            "available_gpu_memory_bytes": free_mem,
+            "full_matrix_allocated": (selected_backend != "streaming")
+        }
+
+        if selected_backend == "streaming":
+            return _GeoStreamingCausalAttentionFunction.apply(q, k, v)
+        elif selected_backend == "recompute_probs":
+            return _GeoCausalAttentionFunction.apply(q, k, v, True)
+        else:
+            return _GeoCausalAttentionFunction.apply(q, k, v, False)
+
+    def get_last_attention_dispatch_telemetry() -> dict:
+        return dict(_last_attention_telemetry)
+
 else:
     causal_attention = _unavailable
 
