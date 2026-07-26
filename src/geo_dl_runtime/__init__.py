@@ -380,18 +380,17 @@ if _attention is not None:
             k_c = k.contiguous()
             v_c = v.contiguous()
             output = _attention.causal_attention_streaming_forward(q_c, k_c, v_c)
-            ctx.save_for_backward(q_c, k_c, v_c)
+            ctx.save_for_backward(q_c, k_c, v_c, output)
             return output
 
         @staticmethod
         def backward(ctx, grad_output: torch.Tensor):
-            q, k, v = ctx.saved_tensors
-            _, probabilities = _attention.forward(q, k, v)
-            gq, gk, gv = _attention.backward(
+            q, k, v, out = ctx.saved_tensors
+            gq, gk, gv = _attention.causal_attention_streaming_vjp(
                 q,
                 k,
                 v,
-                probabilities,
+                out,
                 grad_output.contiguous(),
             )
             return gq, gk, gv
