@@ -93,49 +93,89 @@ torch::Tensor geo_adamw_step(
 
     if (parameters[0].is_cuda()) {
 #ifdef WITH_CUDA
-        torch::Tensor sum_square = torch::empty({}, parameters[0].options());
         cudaStream_t stream = at::cuda::getCurrentCUDAStream(
             parameters[0].get_device()
         ).stream();
-        TORCH_CHECK(
-            cudaMemsetAsync(sum_square.data_ptr<float>(), 0, sizeof(float), stream) == cudaSuccess,
-            "failed to initialize GEO AdamW gradient accumulator"
-        );
-        for (size_t index = 0u; index < parameters.size(); ++index) {
+
+        if (max_grad_norm > 0.0f) {
+            torch::Tensor sum_square = torch::zeros({}, parameters[0].options());
+            for (size_t index = 0u; index < parameters.size(); ++index) {
+                check_status(
+                    geo_tensor_grad_square_cuda_accumulate(
+                        gradients[index].data_ptr<float>(),
+                        static_cast<size_t>(gradients[index].numel()),
+                        sum_square.data_ptr<float>(),
+                        reinterpret_cast<void *>(stream)
+                    ),
+                    "geo_tensor_grad_square_cuda_accumulate"
+                );
+            }
             check_status(
-                geo_tensor_grad_square_cuda_accumulate(
-                    gradients[index].data_ptr<float>(),
-                    static_cast<size_t>(gradients[index].numel()),
+                geo_tensor_grad_clip_cuda_finalize(
                     sum_square.data_ptr<float>(),
+                    static_cast<float>(max_grad_norm),
+                    clip_scale.data_ptr<float>(),
                     reinterpret_cast<void *>(stream)
                 ),
-                "geo_tensor_grad_square_cuda_accumulate"
+                "geo_tensor_grad_clip_cuda_finalize"
             );
         }
+
+        const float *clip_ptr = (max_grad_norm > 0.0f) ? clip_scale.data_ptr<float>() : nullptr;
+
+        const size_t num_tensors = parameters.size();
+        std::vector<float *> h_params(num_tensors);
+        std::vector<const float *> h_grads(num_tensors);
+        std::vector<float *> h_m1(num_tensors);
+        std::vector<float *> h_m2(num_tensors);
+        std::vector<size_t> h_counts(num_tensors);
+
+        for (size_t i = 0u; i < num_tensors; ++i) {
+            h_params[i] = parameters[i].data_ptr<float>();
+            h_grads[i] = gradients[i].data_ptr<float>();
+            h_m1[i] = first_moments[i].data_ptr<float>();
+            h_m2[i] = second_moments[i].data_ptr<float>();
+            h_counts[i] = static_cast<size_t>(parameters[i].numel());
+        }
+
+        float **d_params = nullptr;
+        const float **d_grads = nullptr;
+        float **d_m1 = nullptr;
+        float **d_m2 = nullptr;
+        size_t *d_counts = nullptr;
+
+        cudaMallocAsync(&d_params, num_tensors * sizeof(float *), stream);
+        cudaMallocAsync(&d_grads, num_tensors * sizeof(float *), stream);
+        cudaMallocAsync(&d_m1, num_tensors * sizeof(float *), stream);
+        cudaMallocAsync(&d_m2, num_tensors * sizeof(float *), stream);
+        cudaMallocAsync(&d_counts, num_tensors * sizeof(size_t), stream);
+
+        cudaMemcpyAsync(d_params, h_params.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_grads, h_grads.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_m1, h_m1.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_m2, h_m2.data(), num_tensors * sizeof(float *), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_counts, h_counts.data(), num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+
         check_status(
-            geo_tensor_grad_clip_cuda_finalize(
-                sum_square.data_ptr<float>(),
-                static_cast<float>(max_grad_norm),
-                clip_scale.data_ptr<float>(),
+            geo_tensor_adamw_cuda_step_fused(
+                d_params,
+                d_grads,
+                d_m1,
+                d_m2,
+                d_counts,
+                num_tensors,
+                clip_ptr,
+                config,
                 reinterpret_cast<void *>(stream)
             ),
-            "geo_tensor_grad_clip_cuda_finalize"
+            "geo_tensor_adamw_cuda_step_fused"
         );
-        for (size_t index = 0u; index < parameters.size(); ++index) {
-            check_status(
-                geo_tensor_adamw_cuda_step(
-                    parameters[index].data_ptr<float>(),
-                    gradients[index].data_ptr<float>(),
-                    first_moments[index].data_ptr<float>(),
-                    second_moments[index].data_ptr<float>(),
-                    static_cast<size_t>(parameters[index].numel()),
-                    clip_scale.data_ptr<float>(),
-                    config,
-                    reinterpret_cast<void *>(stream)
-                ),
-                "geo_tensor_adamw_cuda_step"
-            );
-        }
+
+        cudaFreeAsync(d_params, stream);
+        cudaFreeAsync(d_grads, stream);
+        cudaFreeAsync(d_m1, stream);
+        cudaFreeAsync(d_m2, stream);
+        cudaFreeAsync(d_counts, stream);
 #else
         TORCH_CHECK(false, "runtime was built without CUDA support");
 #endif
