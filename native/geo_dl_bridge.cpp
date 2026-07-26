@@ -308,9 +308,47 @@ std::vector<torch::Tensor> geo_silu_mul_backward(torch::Tensor gate, torch::Tens
     return {grad_gate, grad_up};
 }
 
+#ifdef WITH_CUDA
+std::map<std::string, double> geo_linear_backward_decomposed_profile(torch::Tensor x, torch::Tensor weight, torch::Tensor grad_output) {
+    check_tensor(x, "x");
+    check_tensor(weight, "weight");
+    check_tensor(grad_output, "grad_output");
+    TORCH_CHECK(x.device() == weight.device() && x.device() == grad_output.device(), "all tensors must share a device");
+    const auto shape = make_linear_shape(x, weight);
+    torch::Tensor grad_x = torch::empty_like(x);
+    torch::Tensor grad_weight = torch::empty_like(weight);
+
+    float dx_ms = 0.0f;
+    float dw_ms = 0.0f;
+
+    check_status(
+        geo_tensor_linear_cuda_vjp_decomposed_profile(
+            x.data_ptr<float>(),
+            weight.data_ptr<float>(),
+            grad_output.data_ptr<float>(),
+            grad_x.data_ptr<float>(),
+            grad_weight.data_ptr<float>(),
+            &shape,
+            &dx_ms,
+            &dw_ms,
+            current_stream(x)
+        ),
+        "geo_tensor_linear_cuda_vjp_decomposed_profile"
+    );
+
+    std::map<std::string, double> res;
+    res["dx_ms"] = static_cast<double>(dx_ms);
+    res["dw_ms"] = static_cast<double>(dw_ms);
+    return res;
+}
+#endif
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("linear_forward", &geo_linear_forward);
     module.def("linear_backward", &geo_linear_backward);
+#ifdef WITH_CUDA
+    module.def("linear_backward_decomposed_profile", &geo_linear_backward_decomposed_profile);
+#endif
     module.def("add_forward", &geo_add_forward);
     module.def("add_backward", &geo_add_backward);
     module.def("mul_forward", &geo_mul_forward);

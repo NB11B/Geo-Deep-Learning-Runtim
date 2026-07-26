@@ -266,9 +266,18 @@ pybind11::tuple geo_attention_backward_profiled(
     return pybind11::make_tuple(grads, time_dict);
 }
 
+torch::Tensor geo_attention_causal_streaming_forward(
+    torch::Tensor q,
+    torch::Tensor k,
+    torch::Tensor v
+) {
+    return geo_attention_forward_no_probs(q, k, v);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("forward", &geo_attention_forward);
     module.def("forward_no_probs", &geo_attention_forward_no_probs);
+    module.def("causal_attention_streaming_forward", &geo_attention_causal_streaming_forward);
     module.def("backward", &geo_attention_backward);
     module.def("backward_profiled", &geo_attention_backward_profiled);
     module.attr("GEO_DL_RUNTIME_ABI_VERSION") = 1;

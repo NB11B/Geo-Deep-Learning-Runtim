@@ -352,6 +352,34 @@ if _attention is not None:
             )
             return gq, gk, gv, None
 
+    class _GeoStreamingCausalAttentionFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            q: torch.Tensor,
+            k: torch.Tensor,
+            v: torch.Tensor,
+        ) -> torch.Tensor:
+            q_c = q.contiguous()
+            k_c = k.contiguous()
+            v_c = v.contiguous()
+            output = _attention.causal_attention_streaming_forward(q_c, k_c, v_c)
+            ctx.save_for_backward(q_c, k_c, v_c)
+            return output
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            q, k, v = ctx.saved_tensors
+            _, probabilities = _attention.forward(q, k, v)
+            gq, gk, gv = _attention.backward(
+                q,
+                k,
+                v,
+                probabilities,
+                grad_output.contiguous(),
+            )
+            return gq, gk, gv
+
     def causal_attention(
         q: torch.Tensor,
         k: torch.Tensor,
@@ -359,6 +387,7 @@ if _attention is not None:
         recompute_probs: bool = False,
     ) -> torch.Tensor:
         return _GeoCausalAttentionFunction.apply(q, k, v, bool(recompute_probs))
+
 else:
     causal_attention = _unavailable
 
