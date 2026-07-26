@@ -323,11 +323,12 @@ if _attention is not None:
             q_c = q.contiguous()
             k_c = k.contiguous()
             v_c = v.contiguous()
-            output, probabilities = _attention.forward(q_c, k_c, v_c)
             ctx.recompute_probs = bool(recompute_probs)
-            if recompute_probs:
+            if recompute_probs and hasattr(_attention, "forward_no_probs"):
+                output = _attention.forward_no_probs(q_c, k_c, v_c)
                 ctx.save_for_backward(q_c, k_c, v_c)
             else:
+                output, probabilities = _attention.forward(q_c, k_c, v_c)
                 ctx.save_for_backward(q_c, k_c, v_c, probabilities)
             return output
 
