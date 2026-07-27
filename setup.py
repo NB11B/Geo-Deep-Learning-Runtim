@@ -26,6 +26,7 @@ required = [
     GEO_ROOT / "include" / "geo" / "tensor_embedding_cuda.h",
     GEO_ROOT / "include" / "geo" / "tensor_optimizer.h",
     GEO_ROOT / "include" / "geo" / "tensor_optimizer_cuda.h",
+    GEO_ROOT / "include" / "geo" / "geo_implicit_cuda.h",
     GEO_ROOT / "src" / "tensor_linear.c",
     GEO_ROOT / "src" / "tensor_linear_cuda.cu",
     GEO_ROOT / "src" / "tensor_core.c",
@@ -42,7 +43,9 @@ required = [
     GEO_ROOT / "src" / "tensor_embedding_cuda.cu",
     GEO_ROOT / "src" / "tensor_optimizer.c",
     GEO_ROOT / "src" / "tensor_optimizer_cuda.cu",
+    GEO_ROOT / "src" / "geo_implicit_cuda.cu",
 ]
+
 missing = [str(path) for path in required if not path.exists()]
 if missing:
     raise RuntimeError(

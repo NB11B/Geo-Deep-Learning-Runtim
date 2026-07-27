@@ -11,7 +11,9 @@
 #include "geo/tensor_activation_cuda.h"
 #include "geo/tensor_core_cuda.h"
 #include "geo/tensor_linear_cuda.h"
+#include "geo/geo_implicit_cuda.h"
 #endif
+
 
 namespace {
 
@@ -398,13 +400,112 @@ std::map<std::string, double> geo_linear_backward_decomposed_profile(torch::Tens
 }
 #endif
 
+#ifdef WITH_CUDA
+torch::Tensor geo_implicit_linear_forward(
+    const torch::Tensor &x,
+    const torch::Tensor &u,
+    const torch::Tensor &v,
+    const torch::Tensor &alpha,
+    const torch::Tensor &perm_indices,
+    const torch::Tensor &sign_masks
+) {
+    check_tensor(x, "x");
+    check_tensor(u, "u");
+    check_tensor(v, "v");
+    check_tensor(alpha, "alpha");
+
+    const int64_t batch_tokens = x.numel() / x.size(-1);
+    const int64_t in_features = x.size(-1);
+    const int64_t out_features = u.size(1);
+    const int64_t rank = u.size(0);
+
+    auto y = torch::empty({x.size(0), x.size(1), out_features}, x.options());
+    geo_implicit_shape shape = {
+        static_cast<size_t>(batch_tokens),
+        static_cast<size_t>(in_features),
+        static_cast<size_t>(out_features),
+        static_cast<size_t>(rank)
+    };
+
+    geo_tensor_status status = geo_implicit_linear_cuda_forward(
+        x.data_ptr<float>(),
+        u.data_ptr<float>(),
+        v.data_ptr<float>(),
+        alpha.data_ptr<float>(),
+        perm_indices.data_ptr<int32_t>(),
+        sign_masks.data_ptr<float>(),
+        y.data_ptr<float>(),
+        &shape,
+        current_stream(x)
+    );
+    check_status(status, "geo_implicit_linear_cuda_forward");
+    return y;
+}
+
+std::vector<torch::Tensor> geo_implicit_linear_backward(
+    const torch::Tensor &x,
+    const torch::Tensor &u,
+    const torch::Tensor &v,
+    const torch::Tensor &alpha,
+    const torch::Tensor &perm_indices,
+    const torch::Tensor &inv_perm,
+    const torch::Tensor &sign_masks,
+    const torch::Tensor &grad_y
+) {
+    check_tensor(x, "x");
+    check_tensor(u, "u");
+    check_tensor(v, "v");
+    check_tensor(alpha, "alpha");
+    check_tensor(grad_y, "grad_y");
+
+    const int64_t batch_tokens = x.numel() / x.size(-1);
+    const int64_t in_features = x.size(-1);
+    const int64_t out_features = u.size(1);
+    const int64_t rank = u.size(0);
+
+    auto grad_x = torch::zeros_like(x);
+    auto grad_u = torch::zeros_like(u);
+    auto grad_v = torch::zeros_like(v);
+    auto grad_alpha = torch::zeros_like(alpha);
+
+    geo_implicit_shape shape = {
+        static_cast<size_t>(batch_tokens),
+        static_cast<size_t>(in_features),
+        static_cast<size_t>(out_features),
+        static_cast<size_t>(rank)
+    };
+
+    geo_tensor_status status = geo_implicit_linear_cuda_vjp(
+        x.data_ptr<float>(),
+        u.data_ptr<float>(),
+        v.data_ptr<float>(),
+        alpha.data_ptr<float>(),
+        perm_indices.data_ptr<int32_t>(),
+        inv_perm.data_ptr<int32_t>(),
+        sign_masks.data_ptr<float>(),
+        grad_y.data_ptr<float>(),
+        grad_x.data_ptr<float>(),
+        grad_u.data_ptr<float>(),
+        grad_v.data_ptr<float>(),
+        grad_alpha.data_ptr<float>(),
+        &shape,
+        current_stream(x)
+    );
+    check_status(status, "geo_implicit_linear_cuda_vjp");
+    return {grad_x, grad_u, grad_v, grad_alpha};
+}
+#endif
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def("get_last_dispatch_telemetry", &get_last_dispatch_telemetry);
     module.def("linear_forward", &geo_linear_forward);
     module.def("linear_backward", &geo_linear_backward);
 #ifdef WITH_CUDA
     module.def("linear_backward_decomposed_profile", &geo_linear_backward_decomposed_profile);
+    module.def("implicit_linear_forward", &geo_implicit_linear_forward);
+    module.def("implicit_linear_backward", &geo_implicit_linear_backward);
 #endif
+
     module.def("add_forward", &geo_add_forward);
     module.def("add_backward", &geo_add_backward);
     module.def("mul_forward", &geo_mul_forward);
