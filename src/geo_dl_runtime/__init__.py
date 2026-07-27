@@ -680,20 +680,61 @@ class _GeoImplicitLinearFunction(torch.autograd.Function):
 
         return grad_x, grad_u, grad_v, grad_alpha, None, None, None
 
+class _GeoNativeImplicitLinearFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask):
+        ctx.save_for_backward(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
+        x_c = x.float().contiguous() if x.dtype != torch.float32 else x.contiguous()
+        u_c = u.float().contiguous() if u.dtype != torch.float32 else u.contiguous()
+        v_c = v.float().contiguous() if v.dtype != torch.float32 else v.contiguous()
+        alpha_c = alpha.float().contiguous() if alpha.dtype != torch.float32 else alpha.contiguous()
+        perm_c = perm_indices.to(torch.int32).contiguous() if perm_indices.dtype != torch.int32 else perm_indices.contiguous()
+        sign_c = sign_mask.float().contiguous() if sign_mask.dtype != torch.float32 else sign_mask.contiguous()
+
+        out = _C.implicit_linear_forward(x_c, u_c, v_c, alpha_c, perm_c, sign_c)
+        return out.to(x.dtype) if out.dtype != x.dtype else out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask = ctx.saved_tensors
+        x_c = x.float().contiguous() if x.dtype != torch.float32 else x.contiguous()
+        u_c = u.float().contiguous() if u.dtype != torch.float32 else u.contiguous()
+        v_c = v.float().contiguous() if v.dtype != torch.float32 else v.contiguous()
+        alpha_c = alpha.float().contiguous() if alpha.dtype != torch.float32 else alpha.contiguous()
+        perm_c = perm_indices.to(torch.int32).contiguous() if perm_indices.dtype != torch.int32 else perm_indices.contiguous()
+        inv_c = inv_perm_indices.to(torch.int32).contiguous() if inv_perm_indices.dtype != torch.int32 else inv_perm_indices.contiguous()
+        sign_c = sign_mask.float().contiguous() if sign_mask.dtype != torch.float32 else sign_mask.contiguous()
+        go_c = grad_output.float().contiguous() if grad_output.dtype != torch.float32 else grad_output.contiguous()
+
+        grad_x, grad_u, grad_v, grad_alpha = _C.implicit_linear_backward(
+            x_c, u_c, v_c, alpha_c, perm_c, inv_c, sign_c, go_c
+        )
+        return (
+            grad_x.to(x.dtype) if grad_x.dtype != x.dtype else grad_x,
+            grad_u.to(u.dtype) if grad_u.dtype != u.dtype else grad_u,
+            grad_v.to(v.dtype) if grad_v.dtype != v.dtype else grad_v,
+            grad_alpha.to(alpha.dtype) if grad_alpha.dtype != alpha.dtype else grad_alpha,
+            None, None, None
+        )
+
+
 
 _last_implicit_telemetry = {}
 
 
 def implicit_linear(x: torch.Tensor, u: torch.Tensor, v: torch.Tensor, alpha: torch.Tensor, perm_indices: torch.Tensor, inv_perm_indices: torch.Tensor, sign_mask: torch.Tensor) -> torch.Tensor:
     global _last_implicit_telemetry
+    use_native_cuda = bool(_C is not None) and hasattr(_C, "implicit_linear_forward") and x.is_cuda
     _last_implicit_telemetry = {
-        "selected_backend": "geo_torch_implicit_linear",
+        "selected_backend": "geo_native_implicit_cuda" if use_native_cuda else "geo_torch_implicit_linear",
         "implementation_owner": "geo_dl_runtime",
-        "execution_backend": "pytorch_cuda",
+        "execution_backend": "geo_native_cuda" if use_native_cuda else "pytorch_cuda",
         "dense_matrix_materialized": False,
         "x_shape": list(x.shape),
         "rank": u.shape[0],
     }
+    if use_native_cuda:
+        return _GeoNativeImplicitLinearFunction.apply(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
     return _GeoImplicitLinearFunction.apply(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
 
 
