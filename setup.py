@@ -87,8 +87,9 @@ setup(
             "geo_dl_runtime._C",
             "geo_dl_bridge.cpp",
             ["tensor_core.c", "tensor_activation.c"],
-            ["tensor_linear_cuda.cu", "tensor_core_cuda.cu", "tensor_activation_cuda.cu"],
+            ["tensor_linear_cuda.cu", "tensor_core_cuda.cu", "tensor_activation_cuda.cu", "geo_implicit_cuda.cu"],
         ),
+
         extension("geo_dl_runtime._rope", "geo_rope_bridge.cpp", ["tensor_rope.c"], ["tensor_rope_cuda.cu"]),
         extension("geo_dl_runtime._attention", "geo_attention_bridge.cpp", ["tensor_attention.c"], ["tensor_attention_cuda.cu"]),
         extension("geo_dl_runtime._loss", "geo_loss_bridge.cpp", ["tensor_loss.c"], ["tensor_loss_cuda.cu"]),
