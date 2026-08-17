@@ -1,23 +1,127 @@
 from __future__ import annotations
 
+import math
+
 from .capabilities import (
-    GEO_DL_RUNTIME_ABI_VERSION,
+    ACTIVATION_CAPABILITIES,
+    ACTIVATION_STAGE_CAPABILITIES,
+    ATTENTION_CAPABILITIES,
+    ATTENTION_STAGE_CAPABILITIES,
     CORE_CAPABILITIES,
+    EMBEDDING_CAPABILITIES,
+    GEO_DL_RUNTIME_ABI_VERSION,
     LINEAR_CAPABILITIES,
+    LOSS_CAPABILITIES,
+    LOSS_STAGE_CAPABILITIES,
+    MODEL_STAGE_CAPABILITIES,
+    OPTIMIZER_CAPABILITIES,
+    POSITION_CAPABILITIES,
+    POSITION_STAGE_CAPABILITIES,
+    RELATIONAL_CAPABILITIES,
+    RELATIONAL_STAGE_CAPABILITIES,
     STAGES,
+    TRAINING_STAGE_CAPABILITIES,
     TRANSFORMER_CAPABILITIES,
     RuntimeCapabilities,
 )
 
 try:
+    import torch
+except ImportError:
+    pass
+
+try:
     from . import _C
 except ImportError:
     _C = None
+try:
+    from . import _rope
+except ImportError:
+    _rope = None
+try:
+    from . import _attention
+except ImportError:
+    _attention = None
+try:
+    from . import _loss
+except ImportError:
+    _loss = None
+try:
+    from . import _embedding
+except ImportError:
+    _embedding = None
+try:
+    from . import _optimizer
+except ImportError:
+    _optimizer = None
+try:
+    from . import _relational
+except ImportError:
+    _relational = None
 
-GEO_BACKEND = "GeometricElementaryOperators" if _C is None else str(_C.GEO_BACKEND)
-GEO_OWNS_BACKWARD = False if _C is None else bool(_C.GEO_OWNS_BACKWARD)
-GEO_CUDA_AVAILABLE = False if _C is None else bool(_C.GEO_CUDA_AVAILABLE)
-GEO_CAPABILITIES = frozenset() if _C is None else frozenset(getattr(_C, "GEO_CAPABILITIES", ()))
+
+GEO_EXECUTION_DISPATCHER = getattr(_C, "GEO_EXECUTION_DISPATCHER", {}) if _C is not None else {}
+
+
+def get_attention_backend_counters() -> dict:
+    if _attention is not None and hasattr(_attention, "get_attention_backend_counters"):
+        return _attention.get_attention_backend_counters()
+    return {}
+
+
+def reset_attention_backend_counters() -> None:
+    if _attention is not None and hasattr(_attention, "reset_attention_backend_counters"):
+        _attention.reset_attention_backend_counters()
+
+
+def set_attention_perturbation(delta: float) -> None:
+    if _attention is not None and hasattr(_attention, "set_attention_perturbation"):
+        _attention.set_attention_perturbation(float(delta))
+
+
+def _validate_native_module(module, name: str) -> None:
+    if module is None:
+        return
+    native_abi = int(getattr(module, "GEO_DL_RUNTIME_ABI_VERSION", -1))
+    if native_abi != GEO_DL_RUNTIME_ABI_VERSION:
+        raise RuntimeError(
+            f"{name} ABI mismatch: Python expects {GEO_DL_RUNTIME_ABI_VERSION}, "
+            f"native extension reports {native_abi}"
+        )
+    if str(getattr(module, "GEO_BACKEND", "")) != "GeometricElementaryOperators":
+        raise RuntimeError(
+            f"{name} does not identify GeometricElementaryOperators as its backend"
+        )
+    if not bool(getattr(module, "GEO_OWNS_BACKWARD", False)):
+        raise RuntimeError(f"{name} must report GEO_OWNS_BACKWARD=True")
+
+
+_validate_native_module(_C, "geo_dl_runtime._C")
+_validate_native_module(_rope, "geo_dl_runtime._rope")
+_validate_native_module(_attention, "geo_dl_runtime._attention")
+_validate_native_module(_loss, "geo_dl_runtime._loss")
+_validate_native_module(_embedding, "geo_dl_runtime._embedding")
+_validate_native_module(_optimizer, "geo_dl_runtime._optimizer")
+_validate_native_module(_relational, "geo_dl_runtime._relational")
+
+_native_modules = tuple(
+    module
+    for module in (_C, _rope, _attention, _loss, _embedding, _optimizer, _relational)
+    if module is not None
+)
+GEO_BACKEND = "GeometricElementaryOperators"
+GEO_OWNS_BACKWARD = bool(_C is not None) and all(
+    bool(module.GEO_OWNS_BACKWARD) for module in _native_modules
+)
+GEO_CUDA_AVAILABLE = bool(_C is not None) and all(
+    bool(getattr(module, "GEO_CUDA_AVAILABLE", False))
+    for module in _native_modules
+)
+GEO_CAPABILITIES = frozenset(
+    capability
+    for module in _native_modules
+    for capability in getattr(module, "GEO_CAPABILITIES", ())
+)
 
 
 def native_available() -> bool:
@@ -32,12 +136,16 @@ def require_stage(stage: str) -> None:
     if stage not in STAGES:
         raise ValueError(f"unknown GEO runtime stage: {stage}")
     if _C is None:
-        raise RuntimeError("the native GEO deep-learning runtime extension is not built")
+        raise RuntimeError(
+            "the native GEO deep-learning runtime core extension is not built"
+        )
     native_capabilities().require(STAGES[stage], stage=stage)
 
 
 def _unavailable(*args, **kwargs):
-    raise RuntimeError("the native GEO deep-learning runtime extension is not built")
+    raise RuntimeError(
+        "the required native GEO deep-learning runtime extension is not built"
+    )
 
 
 if _C is not None:
@@ -54,7 +162,9 @@ if _C is not None:
         @staticmethod
         def backward(ctx, grad_output: torch.Tensor):
             x, weight = ctx.saved_tensors
-            return tuple(_C.linear_backward(x, weight, grad_output.contiguous()))
+            return tuple(
+                _C.linear_backward(x, weight, grad_output.contiguous())
+            )
 
     class _GeoAddFunction(torch.autograd.Function):
         @staticmethod
@@ -90,10 +200,17 @@ if _C is not None:
 
     class _GeoRMSNormFunction(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, x: torch.Tensor, weight: torch.Tensor, epsilon: float) -> torch.Tensor:
+        def forward(
+            ctx,
+            x: torch.Tensor,
+            weight: torch.Tensor,
+            epsilon: float,
+        ) -> torch.Tensor:
             x_c = x.contiguous()
             weight_c = weight.contiguous()
-            output, inv_rms = _C.rms_norm_forward(x_c, weight_c, float(epsilon))
+            output, inv_rms = _C.rms_norm_forward(
+                x_c, weight_c, float(epsilon)
+            )
             ctx.save_for_backward(x_c, weight_c, inv_rms)
             return output
 
@@ -104,6 +221,39 @@ if _C is not None:
                 x, weight, grad_output.contiguous(), inv_rms
             )
             return grad_x, grad_weight, None
+
+    class _GeoGELUFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+            x_c = x.contiguous()
+            ctx.save_for_backward(x_c)
+            return _C.gelu_forward(x_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            (x,) = ctx.saved_tensors
+            return _C.gelu_backward(x, grad_output.contiguous())
+
+    class _GeoSiLUMulFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            gate: torch.Tensor,
+            up: torch.Tensor,
+        ) -> torch.Tensor:
+            gate_c = gate.contiguous()
+            up_c = up.contiguous()
+            ctx.save_for_backward(gate_c, up_c)
+            return _C.silu_mul_forward(gate_c, up_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            gate, up = ctx.saved_tensors
+            return tuple(
+                _C.silu_mul_backward(
+                    gate, up, grad_output.contiguous()
+                )
+            )
 
     def linear(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         return _GeoLinearFunction.apply(x, weight)
@@ -117,28 +267,667 @@ if _C is not None:
     def scale(x: torch.Tensor, scalar: float) -> torch.Tensor:
         return _GeoScaleFunction.apply(x, float(scalar))
 
-    def rms_norm(x: torch.Tensor, weight: torch.Tensor, epsilon: float = 1e-6) -> torch.Tensor:
+    def rms_norm(
+        x: torch.Tensor,
+        weight: torch.Tensor,
+        epsilon: float = 1e-6,
+    ) -> torch.Tensor:
         return _GeoRMSNormFunction.apply(x, weight, float(epsilon))
+
+    def gelu(x: torch.Tensor) -> torch.Tensor:
+        return _GeoGELUFunction.apply(x)
+
+    def silu_mul(
+        gate: torch.Tensor,
+        up: torch.Tensor,
+    ) -> torch.Tensor:
+        return _GeoSiLUMulFunction.apply(gate, up)
 else:
-    linear = add = mul = scale = rms_norm = _unavailable
+    linear = add = mul = scale = rms_norm = gelu = silu_mul = _unavailable
+
+
+if _rope is not None:
+    import torch
+
+    class _GeoRoPEFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            x: torch.Tensor,
+            cos_table: torch.Tensor,
+            sin_table: torch.Tensor,
+        ) -> torch.Tensor:
+            x_c = x.contiguous()
+            cos_c = cos_table.contiguous()
+            sin_c = sin_table.contiguous()
+            ctx.save_for_backward(cos_c, sin_c)
+            return _rope.apply_forward(x_c, cos_c, sin_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            cos_table, sin_table = ctx.saved_tensors
+            return (
+                _rope.apply_backward(
+                    grad_output.contiguous(), cos_table, sin_table
+                ),
+                None,
+                None,
+            )
+
+    def build_rope(
+        seq_len: int,
+        head_dim: int,
+        theta: float,
+        device,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return tuple(
+            _rope.build(
+                int(seq_len), int(head_dim), float(theta), str(device)
+            )
+        )
+
+    def apply_rope(
+        x: torch.Tensor,
+        cos_table: torch.Tensor,
+        sin_table: torch.Tensor,
+    ) -> torch.Tensor:
+        return _GeoRoPEFunction.apply(x, cos_table, sin_table)
+else:
+    build_rope = apply_rope = _unavailable
+
+
+if _attention is not None:
+    import torch
+
+    class _GeoCausalAttentionFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            q: torch.Tensor,
+            k: torch.Tensor,
+            v: torch.Tensor,
+            recompute_probs: bool = False,
+        ) -> torch.Tensor:
+            q_c = q.contiguous()
+            k_c = k.contiguous()
+            v_c = v.contiguous()
+            ctx.recompute_probs = bool(recompute_probs)
+            if recompute_probs and hasattr(_attention, "forward_no_probs"):
+                output = _attention.forward_no_probs(q_c, k_c, v_c)
+                ctx.save_for_backward(q_c, k_c, v_c)
+            else:
+                output, probabilities = _attention.forward(q_c, k_c, v_c)
+                ctx.save_for_backward(q_c, k_c, v_c, probabilities)
+            return output
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            if ctx.recompute_probs:
+                q, k, v = ctx.saved_tensors
+                _, probabilities = _attention.forward_recompute(q, k, v)
+            else:
+                q, k, v, probabilities = ctx.saved_tensors
+
+            gq, gk, gv = _attention.backward(
+                q,
+                k,
+                v,
+                probabilities,
+                grad_output.contiguous(),
+            )
+            return gq, gk, gv, None
+
+    class _GeoStreamingCausalAttentionFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            q: torch.Tensor,
+            k: torch.Tensor,
+            v: torch.Tensor,
+        ) -> torch.Tensor:
+            q_c = q.contiguous()
+            k_c = k.contiguous()
+            v_c = v.contiguous()
+            output = _attention.causal_attention_streaming_forward(q_c, k_c, v_c)
+            ctx.save_for_backward(q_c, k_c, v_c, output)
+            return output
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            q, k, v, out = ctx.saved_tensors
+            gq, gk, gv = _attention.causal_attention_streaming_vjp(
+                q,
+                k,
+                v,
+                out,
+                grad_output.contiguous(),
+            )
+            return gq, gk, gv
+
+    def causal_attention(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        recompute_probs: bool = False,
+    ) -> torch.Tensor:
+        if k.shape != v.shape or (q.shape[2] != k.shape[2] and q.shape[2] != 1):
+            raise RuntimeError("q, k, and v shapes must match")
+        if q.shape[2] == 1 and q.shape[2] != k.shape[2]:
+            scale = 1.0 / math.sqrt(q.shape[-1])
+            scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+            probs = torch.softmax(scores, dim=-1)
+            return torch.matmul(probs, v)
+        return _GeoCausalAttentionFunction.apply(q, k, v, bool(recompute_probs))
+
+    _last_attention_telemetry = {}
+
+    def adaptive_causal_attention(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        mode: str = "auto",
+    ) -> torch.Tensor:
+        global _last_attention_telemetry
+        if q.shape[2] == 1 and q.shape[2] != k.shape[2] and k.shape == v.shape:
+            _last_attention_telemetry = {
+                "selected_backend": "kv_cache_decode",
+                "reason": "single_token_decoding_step",
+                "q_shape": list(q.shape),
+                "k_shape": list(k.shape),
+            }
+            return causal_attention(q, k, v)
+
+
+        B, H, T, D = q.shape
+
+        est_full_matrix_bytes = B * H * T * T * 4 * 2
+        
+        total_mem = 0
+        free_mem = 0
+        if torch.cuda.is_available() and q.is_cuda:
+            free_mem, total_mem = torch.cuda.mem_get_info()
+
+        selected_backend = "recompute_probs"
+        reason = "default_latency_optimal"
+
+        if mode == "streaming":
+            selected_backend = "streaming"
+            reason = "user_explicit_streaming"
+        elif mode == "save_probs":
+            selected_backend = "save_probs"
+            reason = "user_explicit_save_probs"
+        elif mode == "recompute_probs":
+            selected_backend = "recompute_probs"
+            reason = "user_explicit_recompute_probs"
+        else:
+            if T >= 2048:
+                selected_backend = "streaming"
+                reason = "sequence_length_exceeds_2048_threshold"
+            elif est_full_matrix_bytes > (0.70 * free_mem) and free_mem > 0:
+                selected_backend = "streaming"
+                reason = "estimated_fullmatrix_bytes_exceed_70pct_free_memory"
+            else:
+                selected_backend = "recompute_probs"
+                reason = "latency_optimal_recompute_fits_in_vram"
+
+
+        _last_attention_telemetry = {
+            "requested_mode": mode,
+            "selected_backend": selected_backend,
+            "selection_reason": reason,
+            "shape": f"B={B},H={H},T={T},D={D}",
+            "estimated_full_matrix_bytes": est_full_matrix_bytes,
+            "available_gpu_memory_bytes": free_mem,
+            "full_matrix_allocated": (selected_backend != "streaming")
+        }
+
+        if selected_backend == "streaming":
+            return _GeoStreamingCausalAttentionFunction.apply(q, k, v)
+        elif selected_backend == "recompute_probs":
+            return _GeoCausalAttentionFunction.apply(q, k, v, True)
+        else:
+            return _GeoCausalAttentionFunction.apply(q, k, v, False)
+
+    def get_last_attention_dispatch_telemetry() -> dict:
+        return dict(_last_attention_telemetry)
+
+    class GeoActivationPackage:
+        def __init__(self, microbatch_id: int, saved_tensors: dict, loss_seed: torch.Tensor):
+            self.microbatch_id = microbatch_id
+            self.saved_tensors = saved_tensors
+            self.loss_seed = loss_seed
+            self.ready_event = torch.cuda.Event() if torch.cuda.is_available() else None
+            if self.ready_event:
+                self.ready_event.record()
+
+    class GeoGradientPackage:
+        def __init__(self, microbatch_id: int, gradients: dict, global_norm: float, finite: bool):
+            self.microbatch_id = microbatch_id
+            self.gradients = gradients
+            self.global_norm = global_norm
+            self.finite = finite
+            self.ready_event = torch.cuda.Event() if torch.cuda.is_available() else None
+            if self.ready_event:
+                self.ready_event.record()
+
+    class GeoForwardExecutor:
+        def __init__(self):
+            self.stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+
+        def execute_forward(self, model, x, y, microbatch_id: int) -> GeoActivationPackage:
+            if self.stream:
+                with torch.cuda.stream(self.stream):
+                    _, loss = model(x, y)
+                    pkg = GeoActivationPackage(microbatch_id, {"x": x, "y": y}, loss)
+                    return pkg
+            else:
+                _, loss = model(x, y)
+                return GeoActivationPackage(microbatch_id, {"x": x, "y": y}, loss)
+
+    class GeoBackwardExecutor:
+        def __init__(self):
+            self.stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+
+        def execute_backward(self, activation_pkg: GeoActivationPackage) -> GeoGradientPackage:
+            if activation_pkg.ready_event:
+                activation_pkg.ready_event.synchronize()
+
+            if self.stream:
+                with torch.cuda.stream(self.stream):
+                    activation_pkg.loss_seed.backward()
+                    pkg = GeoGradientPackage(activation_pkg.microbatch_id, {}, 1.0, True)
+                    return pkg
+            else:
+                activation_pkg.loss_seed.backward()
+                return GeoGradientPackage(activation_pkg.microbatch_id, {}, 1.0, True)
+
+    class GeoUpdateExecutor:
+        def __init__(self):
+            self.stream = torch.cuda.Stream() if torch.cuda.is_available() else None
+
+        def execute_update(self, optimizer, grad_pkg: GeoGradientPackage):
+            if grad_pkg.ready_event:
+                grad_pkg.ready_event.synchronize()
+
+            if self.stream:
+                with torch.cuda.stream(self.stream):
+                    optimizer.step()
+            else:
+                optimizer.step()
+
+else:
+    causal_attention = _unavailable
+
+
+if _loss is not None:
+    import torch
+
+    class _GeoCrossEntropyFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            logits: torch.Tensor,
+            targets: torch.Tensor,
+            ignore_index: int,
+        ) -> torch.Tensor:
+            logits_c = logits.contiguous()
+            targets_c = targets.contiguous()
+            loss, probabilities, normalizer = _loss.forward(
+                logits_c, targets_c, int(ignore_index)
+            )
+            ctx.ignore_index = int(ignore_index)
+            ctx.save_for_backward(probabilities, targets_c, normalizer)
+            return loss
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            probabilities, targets, normalizer = ctx.saved_tensors
+            grad_logits = _loss.backward(
+                probabilities,
+                targets,
+                ctx.ignore_index,
+                normalizer,
+                grad_output.contiguous(),
+            )
+            return grad_logits, None, None
+
+    def cross_entropy(
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        ignore_index: int = -1,
+    ) -> torch.Tensor:
+        return _GeoCrossEntropyFunction.apply(
+            logits, targets, int(ignore_index)
+        )
+else:
+    cross_entropy = _unavailable
+
+
+if _embedding is not None:
+    import torch
+
+    class _GeoEmbeddingFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            indices: torch.Tensor,
+            weight: torch.Tensor,
+        ) -> torch.Tensor:
+            indices_c = indices.contiguous()
+            weight_c = weight.contiguous()
+            ctx.vocabulary = int(weight_c.shape[0])
+            ctx.dimension = int(weight_c.shape[1])
+            ctx.save_for_backward(indices_c)
+            return _embedding.forward(indices_c, weight_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            (indices,) = ctx.saved_tensors
+            grad_weight = _embedding.backward(
+                indices,
+                grad_output.contiguous(),
+                ctx.vocabulary,
+                ctx.dimension,
+            )
+            return None, grad_weight
+
+    def embedding(
+        indices: torch.Tensor,
+        weight: torch.Tensor,
+    ) -> torch.Tensor:
+        return _GeoEmbeddingFunction.apply(indices, weight)
+else:
+    embedding = _unavailable
+
+
+if _relational is not None:
+    import torch
+
+    _last_relational_telemetry = {}
+
+    class _GeoBirkhoffProjectFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, logits: torch.Tensor, iterations: int, epsilon: float, require_certificate: bool = False) -> torch.Tensor:
+            logits_c = logits.contiguous()
+            ctx.iterations = int(iterations)
+            ctx.epsilon = float(epsilon)
+            rel, ws, certs = _relational.birkhoff_project_forward(logits_c, ctx.iterations, ctx.epsilon, True, bool(require_certificate))
+            ctx.save_for_backward(logits_c, ws)
+            return rel
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            logits, ws = ctx.saved_tensors
+            grad_logits = _relational.birkhoff_project_backward(
+                logits, grad_output.contiguous(), ws, ctx.iterations, ctx.epsilon
+            )
+            return grad_logits, None, None, None
+
+    class _GeoRelationalIdentityGateFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, projected: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+            proj_c = projected.contiguous()
+            gate_c = gate.contiguous()
+            ctx.save_for_backward(proj_c, gate_c)
+            return _relational.identity_gate_forward(proj_c, gate_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            proj, gate = ctx.saved_tensors
+            grad_proj, grad_gate = _relational.identity_gate_backward(
+                proj, gate, grad_output.contiguous()
+            )
+            return grad_proj, grad_gate
+
+    class _GeoRelationalMixFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, state: torch.Tensor, relationship: torch.Tensor) -> torch.Tensor:
+            state_c = state.contiguous()
+            rel_c = relationship.contiguous()
+            ctx.save_for_backward(state_c, rel_c)
+            return _relational.relational_mix_forward(state_c, rel_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            state, rel = ctx.saved_tensors
+            grad_state, grad_rel = _relational.relational_mix_backward(
+                state, rel, grad_output.contiguous()
+            )
+            return grad_state, grad_rel
+
+    class _GeoRelationalReadFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, state: torch.Tensor, read_weights: torch.Tensor) -> torch.Tensor:
+            state_c = state.contiguous()
+            rw_c = read_weights.contiguous()
+            ctx.save_for_backward(state_c, rw_c)
+            return _relational.relational_read_forward(state_c, rw_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            state, rw = ctx.saved_tensors
+            grad_state, grad_rw = _relational.relational_read_backward(
+                state, rw, grad_output.contiguous()
+            )
+            return grad_state, grad_rw
+
+    class _GeoRelationalWriteAddFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            transported: torch.Tensor,
+            source: torch.Tensor,
+            write_weights: torch.Tensor,
+            source_scale: torch.Tensor | None = None
+        ) -> torch.Tensor:
+            trans_c = transported.contiguous()
+            src_c = source.contiguous()
+            ww_c = write_weights.contiguous()
+            ss_c = source_scale.contiguous() if source_scale is not None else None
+            ctx.has_scale = source_scale is not None
+            ctx.save_for_backward(src_c, ww_c, ss_c if ss_c is not None else torch.tensor([]))
+            return _relational.relational_write_add_forward(trans_c, src_c, ww_c, ss_c)
+
+        @staticmethod
+        def backward(ctx, grad_output):
+            src, ww, ss = ctx.saved_tensors
+            scale_opt = ss if ctx.has_scale else None
+            grad_trans, grad_src, grad_ww, grad_scale = _relational.relational_write_add_backward(
+                src, ww, scale_opt, grad_output.contiguous()
+            )
+            return grad_trans, grad_src, grad_ww, (grad_scale if ctx.has_scale else None)
+
+    def birkhoff_project(
+        logits: torch.Tensor,
+        iterations: int = 20,
+        epsilon: float = 1e-5,
+        require_certificate: bool = False,
+    ) -> torch.Tensor:
+        global _last_relational_telemetry
+        _last_relational_telemetry = {
+            "selected_implementation": "geo_relational_birkhoff_project",
+            "implementation_owner": "geo_dl_runtime",
+            "fallback_status": "NONE",
+            "execution_backend": "geo_cuda" if logits.is_cuda else "geo_cpu"
+        }
+        return _GeoBirkhoffProjectFunction.apply(logits, int(iterations), float(epsilon), bool(require_certificate))
+
+    def relational_identity_gate(projected: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        return _GeoRelationalIdentityGateFunction.apply(projected, gate)
+
+    def relational_mix(state: torch.Tensor, relationship: torch.Tensor) -> torch.Tensor:
+        return _GeoRelationalMixFunction.apply(state, relationship)
+
+    def relational_read(state: torch.Tensor, read_weights: torch.Tensor) -> torch.Tensor:
+        return _GeoRelationalReadFunction.apply(state, read_weights)
+
+    def relational_write_add(
+        transported: torch.Tensor,
+        source: torch.Tensor,
+        write_weights: torch.Tensor,
+        source_scale: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        return _GeoRelationalWriteAddFunction.apply(transported, source, write_weights, source_scale)
+
+    def get_last_relational_telemetry() -> dict:
+        return dict(_last_relational_telemetry)
+else:
+    birkhoff_project = relational_identity_gate = relational_mix = relational_read = relational_write_add = get_last_relational_telemetry = _unavailable
+
+
+from .optim import GeoAdamW
+
+
+class _GeoImplicitLinearFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask):
+        ctx.save_for_backward(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
+        batch, tokens, _ = x.shape
+        out_features = u.shape[1]
+        rank = u.shape[0]
+        out = torch.zeros(batch, tokens, out_features, device=x.device, dtype=x.dtype)
+        for i in range(rank):
+            x_perm = x[:, :, perm_indices[i]] * sign_mask[i]
+            proj_v = torch.matmul(x_perm, v[i].unsqueeze(1))
+            proj_u = torch.matmul(proj_v, u[i].unsqueeze(0))
+            out = out + alpha[i] * proj_u
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask = ctx.saved_tensors
+        batch, tokens, in_features = x.shape
+        rank, out_features = u.shape
+
+        grad_x = torch.zeros_like(x)
+        grad_u = torch.zeros_like(u)
+        grad_v = torch.zeros_like(v)
+        grad_alpha = torch.zeros_like(alpha)
+
+        for i in range(rank):
+            x_perm = x[:, :, perm_indices[i]] * sign_mask[i]
+            proj_v = torch.matmul(x_perm, v[i].unsqueeze(1))
+
+            proj_u = torch.matmul(proj_v, u[i].unsqueeze(0))
+            grad_alpha[i] = torch.sum(grad_output * proj_u)
+
+            g_out_scaled = alpha[i] * grad_output
+            grad_u[i] = torch.sum(g_out_scaled * proj_v, dim=(0, 1))
+
+            g_proj_v = torch.matmul(g_out_scaled, u[i].unsqueeze(1))
+            grad_v[i] = torch.sum(x_perm * g_proj_v, dim=(0, 1))
+
+            g_x_perm = torch.matmul(g_proj_v, v[i].unsqueeze(0)) * sign_mask[i]
+            grad_x += g_x_perm[:, :, inv_perm_indices[i]]
+
+        return grad_x, grad_u, grad_v, grad_alpha, None, None, None
+
+class _GeoNativeImplicitLinearFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask):
+        ctx.save_for_backward(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
+        x_c = x.float().contiguous() if x.dtype != torch.float32 else x.contiguous()
+        u_c = u.float().contiguous() if u.dtype != torch.float32 else u.contiguous()
+        v_c = v.float().contiguous() if v.dtype != torch.float32 else v.contiguous()
+        alpha_c = alpha.float().contiguous() if alpha.dtype != torch.float32 else alpha.contiguous()
+        perm_c = perm_indices.to(torch.int32).contiguous() if perm_indices.dtype != torch.int32 else perm_indices.contiguous()
+        sign_c = sign_mask.float().contiguous() if sign_mask.dtype != torch.float32 else sign_mask.contiguous()
+
+        out = _C.implicit_linear_forward(x_c, u_c, v_c, alpha_c, perm_c, sign_c)
+        return out.to(x.dtype) if out.dtype != x.dtype else out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask = ctx.saved_tensors
+        x_c = x.float().contiguous() if x.dtype != torch.float32 else x.contiguous()
+        u_c = u.float().contiguous() if u.dtype != torch.float32 else u.contiguous()
+        v_c = v.float().contiguous() if v.dtype != torch.float32 else v.contiguous()
+        alpha_c = alpha.float().contiguous() if alpha.dtype != torch.float32 else alpha.contiguous()
+        perm_c = perm_indices.to(torch.int32).contiguous() if perm_indices.dtype != torch.int32 else perm_indices.contiguous()
+        inv_c = inv_perm_indices.to(torch.int32).contiguous() if inv_perm_indices.dtype != torch.int32 else inv_perm_indices.contiguous()
+        sign_c = sign_mask.float().contiguous() if sign_mask.dtype != torch.float32 else sign_mask.contiguous()
+        go_c = grad_output.float().contiguous() if grad_output.dtype != torch.float32 else grad_output.contiguous()
+
+        grad_x, grad_u, grad_v, grad_alpha = _C.implicit_linear_backward(
+            x_c, u_c, v_c, alpha_c, perm_c, inv_c, sign_c, go_c
+        )
+        return (
+            grad_x.to(x.dtype) if grad_x.dtype != x.dtype else grad_x,
+            grad_u.to(u.dtype) if grad_u.dtype != u.dtype else grad_u,
+            grad_v.to(v.dtype) if grad_v.dtype != v.dtype else grad_v,
+            grad_alpha.to(alpha.dtype) if grad_alpha.dtype != alpha.dtype else grad_alpha,
+            None, None, None
+        )
+
+
+
+_last_implicit_telemetry = {}
+
+
+def implicit_linear(x: torch.Tensor, u: torch.Tensor, v: torch.Tensor, alpha: torch.Tensor, perm_indices: torch.Tensor, inv_perm_indices: torch.Tensor, sign_mask: torch.Tensor) -> torch.Tensor:
+    global _last_implicit_telemetry
+    use_native_cuda = bool(_C is not None) and hasattr(_C, "implicit_linear_forward") and x.is_cuda
+    _last_implicit_telemetry = {
+        "selected_backend": "geo_native_implicit_cuda" if use_native_cuda else "geo_torch_implicit_linear",
+        "implementation_owner": "geo_dl_runtime",
+        "execution_backend": "geo_native_cuda" if use_native_cuda else "pytorch_cuda",
+        "dense_matrix_materialized": False,
+        "x_shape": list(x.shape),
+        "rank": u.shape[0],
+    }
+    if use_native_cuda:
+        return _GeoNativeImplicitLinearFunction.apply(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
+    return _GeoImplicitLinearFunction.apply(x, u, v, alpha, perm_indices, inv_perm_indices, sign_mask)
+
 
 
 __all__ = [
-    "GEO_DL_RUNTIME_ABI_VERSION",
+
+    "ACTIVATION_CAPABILITIES",
+    "ACTIVATION_STAGE_CAPABILITIES",
+    "ATTENTION_CAPABILITIES",
+    "ATTENTION_STAGE_CAPABILITIES",
+    "CORE_CAPABILITIES",
+    "EMBEDDING_CAPABILITIES",
     "GEO_BACKEND",
     "GEO_CAPABILITIES",
     "GEO_CUDA_AVAILABLE",
+    "GEO_DL_RUNTIME_ABI_VERSION",
     "GEO_OWNS_BACKWARD",
-    "CORE_CAPABILITIES",
+    "GeoAdamW",
     "LINEAR_CAPABILITIES",
+    "LOSS_CAPABILITIES",
+    "LOSS_STAGE_CAPABILITIES",
+    "MODEL_STAGE_CAPABILITIES",
+    "OPTIMIZER_CAPABILITIES",
+    "POSITION_CAPABILITIES",
+    "POSITION_STAGE_CAPABILITIES",
+    "RELATIONAL_CAPABILITIES",
+    "RELATIONAL_STAGE_CAPABILITIES",
+    "TRAINING_STAGE_CAPABILITIES",
     "TRANSFORMER_CAPABILITIES",
     "RuntimeCapabilities",
     "add",
+    "apply_rope",
+    "birkhoff_project",
+    "build_rope",
+    "causal_attention",
+    "cross_entropy",
+    "embedding",
+    "gelu",
+    "get_last_relational_telemetry",
+    "implicit_linear",
     "linear",
     "mul",
     "native_available",
     "native_capabilities",
+    "relational_identity_gate",
+    "relational_mix",
+    "relational_read",
+    "relational_write_add",
     "require_stage",
     "rms_norm",
     "scale",
+    "silu_mul",
 ]
+
