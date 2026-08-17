@@ -26,6 +26,8 @@ required = [
     GEO_ROOT / "include" / "geo" / "tensor_embedding_cuda.h",
     GEO_ROOT / "include" / "geo" / "tensor_optimizer.h",
     GEO_ROOT / "include" / "geo" / "tensor_optimizer_cuda.h",
+    GEO_ROOT / "include" / "geo" / "tensor_relational.h",
+    GEO_ROOT / "include" / "geo" / "tensor_relational_cuda.h",
     GEO_ROOT / "include" / "geo" / "geo_implicit_cuda.h",
     GEO_ROOT / "src" / "tensor_linear.c",
     GEO_ROOT / "src" / "tensor_linear_cuda.cu",
@@ -43,6 +45,8 @@ required = [
     GEO_ROOT / "src" / "tensor_embedding_cuda.cu",
     GEO_ROOT / "src" / "tensor_optimizer.c",
     GEO_ROOT / "src" / "tensor_optimizer_cuda.cu",
+    GEO_ROOT / "src" / "tensor_relational.c",
+    GEO_ROOT / "src" / "tensor_relational_cuda.cu",
     GEO_ROOT / "src" / "geo_implicit_cuda.cu",
 ]
 
@@ -95,6 +99,7 @@ setup(
         extension("geo_dl_runtime._loss", "geo_loss_bridge.cpp", ["tensor_loss.c"], ["tensor_loss_cuda.cu"]),
         extension("geo_dl_runtime._embedding", "geo_embedding_bridge.cpp", ["tensor_embedding.c"], ["tensor_embedding_cuda.cu"]),
         extension("geo_dl_runtime._optimizer", "geo_optimizer_bridge.cpp", ["tensor_optimizer.c"], ["tensor_optimizer_cuda.cu"]),
+        extension("geo_dl_runtime._relational", "geo_relational_bridge.cpp", ["tensor_relational.c"], ["tensor_relational_cuda.cu"]),
     ],
     cmdclass={"build_ext": BuildExtension.with_options(no_python_abi_suffix=True)},
 )

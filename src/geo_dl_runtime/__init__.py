@@ -17,6 +17,8 @@ from .capabilities import (
     OPTIMIZER_CAPABILITIES,
     POSITION_CAPABILITIES,
     POSITION_STAGE_CAPABILITIES,
+    RELATIONAL_CAPABILITIES,
+    RELATIONAL_STAGE_CAPABILITIES,
     STAGES,
     TRAINING_STAGE_CAPABILITIES,
     TRANSFORMER_CAPABILITIES,
@@ -52,6 +54,10 @@ try:
     from . import _optimizer
 except ImportError:
     _optimizer = None
+try:
+    from . import _relational
+except ImportError:
+    _relational = None
 
 
 GEO_EXECUTION_DISPATCHER = getattr(_C, "GEO_EXECUTION_DISPATCHER", {}) if _C is not None else {}
@@ -96,10 +102,11 @@ _validate_native_module(_attention, "geo_dl_runtime._attention")
 _validate_native_module(_loss, "geo_dl_runtime._loss")
 _validate_native_module(_embedding, "geo_dl_runtime._embedding")
 _validate_native_module(_optimizer, "geo_dl_runtime._optimizer")
+_validate_native_module(_relational, "geo_dl_runtime._relational")
 
 _native_modules = tuple(
     module
-    for module in (_C, _rope, _attention, _loss, _embedding, _optimizer)
+    for module in (_C, _rope, _attention, _loss, _embedding, _optimizer, _relational)
     if module is not None
 )
 GEO_BACKEND = "GeometricElementaryOperators"
@@ -633,6 +640,141 @@ else:
     embedding = _unavailable
 
 
+if _relational is not None:
+    import torch
+
+    _last_relational_telemetry = {}
+
+    class _GeoBirkhoffProjectFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, logits: torch.Tensor, iterations: int, epsilon: float, require_certificate: bool = False) -> torch.Tensor:
+            logits_c = logits.contiguous()
+            ctx.iterations = int(iterations)
+            ctx.epsilon = float(epsilon)
+            rel, ws, certs = _relational.birkhoff_project_forward(logits_c, ctx.iterations, ctx.epsilon, True, bool(require_certificate))
+            ctx.save_for_backward(logits_c, ws)
+            return rel
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            logits, ws = ctx.saved_tensors
+            grad_logits = _relational.birkhoff_project_backward(
+                logits, grad_output.contiguous(), ws, ctx.iterations, ctx.epsilon
+            )
+            return grad_logits, None, None, None
+
+    class _GeoRelationalIdentityGateFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, projected: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+            proj_c = projected.contiguous()
+            gate_c = gate.contiguous()
+            ctx.save_for_backward(proj_c, gate_c)
+            return _relational.identity_gate_forward(proj_c, gate_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            proj, gate = ctx.saved_tensors
+            grad_proj, grad_gate = _relational.identity_gate_backward(
+                proj, gate, grad_output.contiguous()
+            )
+            return grad_proj, grad_gate
+
+    class _GeoRelationalMixFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, state: torch.Tensor, relationship: torch.Tensor) -> torch.Tensor:
+            state_c = state.contiguous()
+            rel_c = relationship.contiguous()
+            ctx.save_for_backward(state_c, rel_c)
+            return _relational.relational_mix_forward(state_c, rel_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            state, rel = ctx.saved_tensors
+            grad_state, grad_rel = _relational.relational_mix_backward(
+                state, rel, grad_output.contiguous()
+            )
+            return grad_state, grad_rel
+
+    class _GeoRelationalReadFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, state: torch.Tensor, read_weights: torch.Tensor) -> torch.Tensor:
+            state_c = state.contiguous()
+            rw_c = read_weights.contiguous()
+            ctx.save_for_backward(state_c, rw_c)
+            return _relational.relational_read_forward(state_c, rw_c)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            state, rw = ctx.saved_tensors
+            grad_state, grad_rw = _relational.relational_read_backward(
+                state, rw, grad_output.contiguous()
+            )
+            return grad_state, grad_rw
+
+    class _GeoRelationalWriteAddFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            transported: torch.Tensor,
+            source: torch.Tensor,
+            write_weights: torch.Tensor,
+            source_scale: torch.Tensor | None = None
+        ) -> torch.Tensor:
+            trans_c = transported.contiguous()
+            src_c = source.contiguous()
+            ww_c = write_weights.contiguous()
+            ss_c = source_scale.contiguous() if source_scale is not None else None
+            ctx.has_scale = source_scale is not None
+            ctx.save_for_backward(src_c, ww_c, ss_c if ss_c is not None else torch.tensor([]))
+            return _relational.relational_write_add_forward(trans_c, src_c, ww_c, ss_c)
+
+        @staticmethod
+        def backward(ctx, grad_output):
+            src, ww, ss = ctx.saved_tensors
+            scale_opt = ss if ctx.has_scale else None
+            grad_trans, grad_src, grad_ww, grad_scale = _relational.relational_write_add_backward(
+                src, ww, scale_opt, grad_output.contiguous()
+            )
+            return grad_trans, grad_src, grad_ww, (grad_scale if ctx.has_scale else None)
+
+    def birkhoff_project(
+        logits: torch.Tensor,
+        iterations: int = 20,
+        epsilon: float = 1e-5,
+        require_certificate: bool = False,
+    ) -> torch.Tensor:
+        global _last_relational_telemetry
+        _last_relational_telemetry = {
+            "selected_implementation": "geo_relational_birkhoff_project",
+            "implementation_owner": "geo_dl_runtime",
+            "fallback_status": "NONE",
+            "execution_backend": "geo_cuda" if logits.is_cuda else "geo_cpu"
+        }
+        return _GeoBirkhoffProjectFunction.apply(logits, int(iterations), float(epsilon), bool(require_certificate))
+
+    def relational_identity_gate(projected: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        return _GeoRelationalIdentityGateFunction.apply(projected, gate)
+
+    def relational_mix(state: torch.Tensor, relationship: torch.Tensor) -> torch.Tensor:
+        return _GeoRelationalMixFunction.apply(state, relationship)
+
+    def relational_read(state: torch.Tensor, read_weights: torch.Tensor) -> torch.Tensor:
+        return _GeoRelationalReadFunction.apply(state, read_weights)
+
+    def relational_write_add(
+        transported: torch.Tensor,
+        source: torch.Tensor,
+        write_weights: torch.Tensor,
+        source_scale: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        return _GeoRelationalWriteAddFunction.apply(transported, source, write_weights, source_scale)
+
+    def get_last_relational_telemetry() -> dict:
+        return dict(_last_relational_telemetry)
+else:
+    birkhoff_project = relational_identity_gate = relational_mix = relational_read = relational_write_add = get_last_relational_telemetry = _unavailable
+
+
 from .optim import GeoAdamW
 
 
@@ -760,21 +902,29 @@ __all__ = [
     "OPTIMIZER_CAPABILITIES",
     "POSITION_CAPABILITIES",
     "POSITION_STAGE_CAPABILITIES",
+    "RELATIONAL_CAPABILITIES",
+    "RELATIONAL_STAGE_CAPABILITIES",
     "TRAINING_STAGE_CAPABILITIES",
     "TRANSFORMER_CAPABILITIES",
     "RuntimeCapabilities",
     "add",
     "apply_rope",
+    "birkhoff_project",
     "build_rope",
     "causal_attention",
     "cross_entropy",
     "embedding",
     "gelu",
+    "get_last_relational_telemetry",
     "implicit_linear",
     "linear",
     "mul",
     "native_available",
     "native_capabilities",
+    "relational_identity_gate",
+    "relational_mix",
+    "relational_read",
+    "relational_write_add",
     "require_stage",
     "rms_norm",
     "scale",
